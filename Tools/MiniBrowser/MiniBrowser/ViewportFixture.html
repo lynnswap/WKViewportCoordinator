@@ -62,9 +62,31 @@
         </section>
     </main>
     <script>
-        const waitForTwoFrames = () => new Promise((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(resolve));
+        const pendingStates = new Map();
+
+        const buildErrorState = (message) => JSON.stringify({
+            status: "error",
+            revision: 0,
+            activeElement: "",
+            topMarkerTop: -1,
+            topMarkerBottom: -1,
+            bottomInputTop: -1,
+            bottomInputBottom: -1,
+            viewportHeight: -1,
+            bottomWithinViewport: false,
+            errorMessage: String(message)
         });
+
+        const scheduleStateCapture = (requestID) => {
+            pendingStates.delete(requestID);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                try {
+                    pendingStates.set(requestID, buildState());
+                } catch (error) {
+                    pendingStates.set(requestID, buildErrorState(error));
+                }
+            }));
+        };
 
         const buildState = () => {
             const activeElement = document.activeElement?.id || "none";
@@ -88,17 +110,20 @@
         };
 
         window.testHarness = {
-            async reportState() {
-                await waitForTwoFrames();
-                return buildState();
+            requestStateCapture(requestID) {
+                scheduleStateCapture(requestID);
             },
-            async focusInput(identifier) {
+            focusInput(identifier, requestID) {
                 const input = document.getElementById(identifier);
                 if (input) {
                     input.focus();
                 }
-                await waitForTwoFrames();
-                return buildState();
+                scheduleStateCapture(requestID);
+            },
+            takePendingState(requestID) {
+                const state = pendingStates.get(requestID) ?? null;
+                pendingStates.delete(requestID);
+                return state;
             }
         };
     </script>
