@@ -463,7 +463,7 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
-    func resolvedMetricsIgnoreSafeAreaSubtractionForEdgesOutsideSafeAreaHandling() {
+    func resolvedMetricsSubtractSafeAreaOnlyForAffectedEdgesInFallback() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
                 safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
@@ -479,7 +479,7 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(
-            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 103, left: 0, bottom: 54, right: 0)
         )
     }
 

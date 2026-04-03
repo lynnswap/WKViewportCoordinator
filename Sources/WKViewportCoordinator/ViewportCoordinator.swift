@@ -120,7 +120,12 @@ struct ResolvedViewportMetrics: Equatable {
             return .zero
         }
 
-        return safeAreaInsets
+        return UIEdgeInsets(
+            top: safeAreaAffectedEdges.contains(.top) ? safeAreaInsets.top : 0,
+            left: safeAreaAffectedEdges.contains(.left) ? safeAreaInsets.left : 0,
+            bottom: safeAreaAffectedEdges.contains(.bottom) ? safeAreaInsets.bottom : 0,
+            right: safeAreaAffectedEdges.contains(.right) ? safeAreaInsets.right : 0
+        )
     }
 }
 
