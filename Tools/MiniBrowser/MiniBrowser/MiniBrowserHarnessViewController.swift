@@ -124,6 +124,8 @@ final class MiniBrowserHarnessState {
     private(set) var fixtureLoaded = false
     private(set) var nativeMetrics: NativeMetrics
     private(set) var pageMetrics = PageMetrics.idle
+    private var nextPageMetricsRequestID = 0
+    private var pageMetricsGeneration = 0
 
     init(processInfo: ProcessInfo = .processInfo) {
         let initialScenario = Scenario(rawValue: processInfo.environment["MINIBROWSER_SCENARIO"] ?? "") ?? .standard
@@ -160,6 +162,7 @@ final class MiniBrowserHarnessState {
             return
         }
 
+        pageMetricsGeneration += 1
         fixtureLoaded = false
         pageMetrics = PageMetrics(status: "loading", revision: pageMetrics.revision + 1, activeElement: "", topMarkerTop: -1, topMarkerBottom: -1, bottomInputTop: -1, bottomInputBottom: -1, viewportHeight: -1, bottomWithinViewport: false, errorMessage: nil)
         webView.loadFileURL(fixtureURL, allowingReadAccessTo: fixtureURL.deletingLastPathComponent())
@@ -214,49 +217,105 @@ final class MiniBrowserHarnessState {
     }
 
     func capturePageMetrics() async {
-        await executePageMetricsScript("return await window.testHarness.reportState();")
-    }
-
-    func focusBottomInput() async {
-        await executePageMetricsScript(
-            "return await window.testHarness.focusInput(identifier);",
-            arguments: ["identifier": "bottom-input"]
-        )
-    }
-
-    func markPageMetricsError(_ message: String) {
-        pageMetrics = errorPageMetrics(message: message)
-    }
-
-    private func executePageMetricsScript(_ script: String, arguments: [String: Any] = [:]) async {
         guard fixtureLoaded else {
-            pageMetrics = PageMetrics(status: "loading", revision: pageMetrics.revision + 1, activeElement: "", topMarkerTop: -1, topMarkerBottom: -1, bottomInputTop: -1, bottomInputBottom: -1, viewportHeight: -1, bottomWithinViewport: false, errorMessage: nil)
+            setPageMetricsLoading()
             return
         }
 
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
-                script,
-                arguments: arguments,
-                in: nil,
-                contentWorld: .page
-            )
-            guard let rawJSON = rawResult as? String else {
-                pageMetrics = errorPageMetrics(message: "unexpected-page-result")
-                return
-            }
+            let requestID = makePageMetricsRequestID()
+            let generation = pageMetricsGeneration
+            try await evaluateJavaScriptVoid("window.testHarness.requestStateCapture(\(requestID));")
+            let rawJSON = try await nextPendingPageMetricsJSON(for: requestID, generation: generation)
             pageMetrics = try decodePageMetrics(from: rawJSON)
         } catch {
-            pageMetrics = errorPageMetrics(message: error.localizedDescription)
+            handlePageMetricsFailure(error)
         }
+    }
+
+    func focusBottomInput() async {
+        guard fixtureLoaded else {
+            setPageMetricsLoading()
+            return
+        }
+
+        do {
+            let requestID = makePageMetricsRequestID()
+            let generation = pageMetricsGeneration
+            try await evaluateJavaScriptVoid("window.testHarness.focusInput('bottom-input', \(requestID));")
+            let rawJSON = try await nextPendingPageMetricsJSON(for: requestID, generation: generation)
+            pageMetrics = try decodePageMetrics(from: rawJSON)
+        } catch {
+            handlePageMetricsFailure(error)
+        }
+    }
+
+    func markPageMetricsError(_ message: String) {
+        pageMetricsGeneration += 1
+        pageMetrics = errorPageMetrics(message: message)
     }
 
     private func decodePageMetrics(from rawJSON: String) throws -> PageMetrics {
         var metrics = try JSONDecoder().decode(PageMetrics.self, from: Data(rawJSON.utf8))
-        metrics.status = "ready"
         metrics.revision = pageMetrics.revision + 1
-        metrics.errorMessage = nil
+        if metrics.status != "error" {
+            metrics.status = "ready"
+            metrics.errorMessage = nil
+        }
         return metrics
+    }
+
+    private func makePageMetricsRequestID() -> Int {
+        nextPageMetricsRequestID += 1
+        return nextPageMetricsRequestID
+    }
+
+    private func nextPendingPageMetricsJSON(for requestID: Int, generation: Int) async throws -> String {
+        while true {
+            if let rawJSON = try await evaluateJavaScriptOptionalString("window.testHarness.takePendingState(\(requestID));") {
+                if pageMetricsGeneration != generation {
+                    throw PageMetricsError.fixtureReloaded
+                }
+                return rawJSON
+            }
+            if fixtureLoaded == false || pageMetricsGeneration != generation {
+                throw PageMetricsError.fixtureReloaded
+            }
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func evaluateJavaScriptOptionalString(_ script: String) async throws -> String? {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript(script) { result, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                if result is NSNull || result == nil {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                guard let string = result as? String else {
+                    continuation.resume(throwing: PageMetricsError.unexpectedResultType)
+                    return
+                }
+                continuation.resume(returning: string)
+            }
+        }
+    }
+
+    private func evaluateJavaScriptVoid(_ script: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            webView.evaluateJavaScript(script) { _, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(returning: ())
+            }
+        }
     }
 
     private func errorPageMetrics(message: String) -> PageMetrics {
@@ -272,6 +331,20 @@ final class MiniBrowserHarnessState {
             bottomWithinViewport: false,
             errorMessage: message
         )
+    }
+
+    private func setPageMetricsLoading() {
+        pageMetrics = PageMetrics(status: "loading", revision: pageMetrics.revision + 1, activeElement: "", topMarkerTop: -1, topMarkerBottom: -1, bottomInputTop: -1, bottomInputBottom: -1, viewportHeight: -1, bottomWithinViewport: false, errorMessage: nil)
+    }
+
+    private func handlePageMetricsFailure(_ error: any Error) {
+        if case PageMetricsError.fixtureReloaded = error {
+            if pageMetrics.status != "error" {
+                setPageMetricsLoading()
+            }
+            return
+        }
+        pageMetrics = errorPageMetrics(message: error.localizedDescription)
     }
 
     private var fixtureURL: URL? {
@@ -298,6 +371,11 @@ final class MiniBrowserHarnessState {
     private static func rounded(_ value: CGFloat) -> Int {
         Int(value.rounded())
     }
+}
+
+private enum PageMetricsError: Error {
+    case unexpectedResultType
+    case fixtureReloaded
 }
 
 @MainActor
