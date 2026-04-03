@@ -130,7 +130,7 @@ struct ResolvedViewportMetrics: Equatable {
 }
 
 @MainActor
-public protocol ViewportMetricsProvider {
+public protocol ViewportMetricsSource {
     func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
@@ -140,36 +140,8 @@ public protocol ViewportMetricsProvider {
 }
 
 @MainActor
-public final class NavigationControllerViewportMetricsProvider: ViewportMetricsProvider {
+public final class ViewportMetricsProvider: ViewportMetricsSource {
     public init() {}
-
-    static func resolvedTopObscuredHeight(
-        safeAreaInsets: UIEdgeInsets,
-        statusBarOverlapHeight: CGFloat
-    ) -> CGFloat {
-        max(safeAreaInsets.top, statusBarOverlapHeight)
-    }
-
-    static func visibleStatusBarOverlapHeight(in hostView: UIView?) -> CGFloat {
-        guard
-            let hostView,
-            let window = hostView.window,
-            let windowScene = window.windowScene,
-            let statusBarManager = windowScene.statusBarManager,
-            statusBarManager.isStatusBarHidden == false
-        else {
-            return 0
-        }
-
-        let statusBarFrameInScene = statusBarManager.statusBarFrame
-        guard statusBarFrameInScene.isEmpty == false else {
-            return 0
-        }
-
-        let statusBarFrameInWindow = window.convert(statusBarFrameInScene, from: window.screen.coordinateSpace)
-        let statusBarFrameInHostView = hostView.convert(statusBarFrameInWindow, from: window)
-        return max(0, hostView.bounds.intersection(statusBarFrameInHostView).height)
-    }
 
     public func makeViewportMetrics(
         in hostViewController: UIViewController,
@@ -177,20 +149,115 @@ public final class NavigationControllerViewportMetricsProvider: ViewportMetricsP
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat
     ) -> ViewportMetrics {
-        let hostView = hostViewController.viewIfLoaded
-        let safeAreaInsets = hostView?.safeAreaInsets ?? .zero
-        let topObscuredHeight = Self.resolvedTopObscuredHeight(
-            safeAreaInsets: safeAreaInsets,
-            statusBarOverlapHeight: Self.visibleStatusBarOverlapHeight(in: hostView)
+        let hostView = webView.superview ?? hostViewController.viewIfLoaded
+        let safeAreaInsets = projectedWindowSafeAreaInsets(in: hostView)
+        let topObscuredHeight = max(
+            safeAreaInsets.top,
+            topEdgeObscuredHeight(
+                of: hostViewController.navigationController?.navigationBar,
+                in: hostView
+            )
+        )
+        let bottomObscuredHeight = max(
+            safeAreaInsets.bottom,
+            bottomEdgeObscuredHeight(of: hostViewController.tabBarController?.tabBar, in: hostView),
+            bottomEdgeObscuredHeight(of: resolvedVisibleToolbar(for: hostViewController), in: hostView)
         )
         return ViewportMetrics(
             safeAreaInsets: safeAreaInsets,
             topObscuredHeight: topObscuredHeight,
-            bottomObscuredHeight: safeAreaInsets.bottom,
+            bottomObscuredHeight: bottomObscuredHeight,
             keyboardOverlapHeight: keyboardOverlapHeight,
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
             bottomChromeMode: .normal
         )
+    }
+
+    private func projectedWindowSafeAreaInsets(in hostView: UIView?) -> UIEdgeInsets {
+        guard let hostView, let window = hostView.window else {
+            return .zero
+        }
+
+        let hostRectInWindow = hostView.convert(hostView.bounds, to: window)
+        let safeRectInWindow = window.bounds.inset(by: window.safeAreaInsets)
+
+        return UIEdgeInsets(
+            top: max(0, safeRectInWindow.minY - hostRectInWindow.minY),
+            left: max(0, safeRectInWindow.minX - hostRectInWindow.minX),
+            bottom: max(0, hostRectInWindow.maxY - safeRectInWindow.maxY),
+            right: max(0, hostRectInWindow.maxX - safeRectInWindow.maxX)
+        )
+    }
+
+    private func resolvedVisibleToolbar(for hostViewController: UIViewController) -> UIToolbar? {
+        guard let navigationController = hostViewController.navigationController else {
+            return nil
+        }
+        guard navigationController.isToolbarHidden == false else {
+            return nil
+        }
+        return navigationController.toolbar
+    }
+
+    private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
+        guard let chromeView, let hostView else {
+            return 0
+        }
+        guard let window = hostView.window, chromeView.window != nil else {
+            return 0
+        }
+        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+            return 0
+        }
+
+        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
+        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
+        guard
+            hostFrameInWindow.intersects(chromeFrameInWindow)
+                || chromeFrameInWindow.maxY > hostFrameInWindow.minY
+        else {
+            return 0
+        }
+
+        return max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+    }
+
+    private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
+        guard let chromeView, let hostView else {
+            return 0
+        }
+        guard let window = hostView.window, chromeView.window != nil else {
+            return 0
+        }
+        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+            return 0
+        }
+
+        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
+        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
+        guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+            return 0
+        }
+        guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
+            return 0
+        }
+
+        return max(0, hostFrameInWindow.maxY - max(hostFrameInWindow.minY, chromeFrameInWindow.minY))
+    }
+
+    private func effectiveAlpha(of view: UIView) -> CGFloat {
+        var alpha = view.alpha
+        var currentSuperview = view.superview
+
+        while let superview = currentSuperview {
+            if superview.isHidden {
+                return 0
+            }
+            alpha *= superview.alpha
+            currentSuperview = superview.superview
+        }
+
+        return alpha
     }
 }
 
@@ -208,7 +275,7 @@ public final class ViewportCoordinator: NSObject {
             updateViewport()
         }
     }
-    public var metricsProvider: any ViewportMetricsProvider {
+    public var metricsProvider: any ViewportMetricsSource {
         didSet {
             lastAppliedResolvedMetrics = nil
             updateViewport()
@@ -260,7 +327,7 @@ public final class ViewportCoordinator: NSObject {
         hostViewController: UIViewController? = nil,
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsSource = ViewportMetricsProvider()
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
@@ -275,7 +342,7 @@ public final class ViewportCoordinator: NSObject {
     public convenience init(
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsSource = ViewportMetricsProvider()
     ) {
         self.init(
             hostViewController: nil,

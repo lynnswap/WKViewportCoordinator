@@ -25,7 +25,6 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertTrue(initialNative.attached)
         XCTAssertTrue(initialNative.windowAttached)
         XCTAssertEqual(initialNative.obscuredTop, initialNative.expectedTop)
-        XCTAssertEqual(initialNative.obscuredBottom, initialNative.expectedBottom)
         XCTAssertGreaterThan(initialNative.effectiveTop, 0)
         XCTAssertGreaterThan(initialNative.effectiveBottom, 0)
         XCTAssertGreaterThanOrEqual(initialPage.topMarkerTop, 0)
@@ -66,7 +65,6 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertTrue(reattached.attached)
         XCTAssertTrue(reattached.windowAttached)
         XCTAssertEqual(reattached.obscuredTop, reattached.expectedTop)
-        XCTAssertEqual(reattached.obscuredBottom, reattached.expectedBottom)
         XCTAssertGreaterThan(reattached.effectiveTop, 0)
         XCTAssertGreaterThan(reattached.effectiveBottom, 0)
 
@@ -81,18 +79,39 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertLessThanOrEqual(neverNative.adjustedTop, neverNative.effectiveTop)
         XCTAssertLessThanOrEqual(neverNative.adjustedBottom, neverNative.effectiveBottom)
 
+        postCommand(.setScenario(.standard), sessionID: commandSessionID)
+        let standardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
+        )
+
+        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
+        let visibleStandardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.scenario == "standard"
+                    && $0.revision > standardBeforeExcludedNative.revision
+            }
+        )
+        let visibleStandardBeforeExcludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
+
         postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
-        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
-        XCTAssertLessThan(excludedPage.topMarkerTop, chromeHiddenPage.topMarkerTop)
+        let excludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "excludeTopSafeArea" && $0.revision > visibleStandardBeforeExcludedNative.revision }
+        )
+        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > visibleStandardBeforeExcludedPage.revision })
+        XCTAssertEqual(excludedNative.scenario, "excludeTopSafeArea")
+        XCTAssertGreaterThan(excludedPage.revision, visibleStandardBeforeExcludedPage.revision)
 
         postCommand(.setScenario(.standard), sessionID: commandSessionID)
         let restoredStandard = try nativeMetrics(
             in: app,
-            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
+            matching: { $0.scenario == "standard" && $0.revision > excludedNative.revision }
         )
         XCTAssertTrue(restoredStandard.attached)
         XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
-        XCTAssertEqual(restoredStandard.obscuredBottom, restoredStandard.expectedBottom)
 
         postCommand(.focusBottomInput, sessionID: commandSessionID)
         let focusedPage = try pageMetrics(

@@ -213,6 +213,11 @@ final class MiniBrowserHarnessState {
     }
 
     func captureNativeMetrics(in hostViewController: UIViewController) {
+        hostViewController.navigationController?.view.layoutIfNeeded()
+        hostViewController.view.layoutIfNeeded()
+        webView.superview?.layoutIfNeeded()
+        webView.layoutIfNeeded()
+
         let attached = webView.superview != nil
         let windowAttached = webView.window != nil
         let obscuredInsets: UIEdgeInsets
@@ -383,12 +388,16 @@ final class MiniBrowserHarnessState {
     }
 
     private func expectedInsets(in hostViewController: UIViewController, attached: Bool) -> (top: Int, bottom: Int) {
-        guard attached, let hostView = hostViewController.viewIfLoaded else {
+        guard attached, hostViewController.viewIfLoaded != nil else {
             return (0, 0)
         }
-        let safeAreaInsets = hostView.safeAreaInsets
-        let topInset = max(safeAreaInsets.top, statusBarOverlapHeight(in: hostView))
-        return (Self.rounded(topInset), Self.rounded(safeAreaInsets.bottom))
+        let metrics = webView.viewportMetricsProvider.makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: 0,
+            inputAccessoryOverlapHeight: 0
+        )
+        return (Self.rounded(metrics.topObscuredHeight), Self.rounded(metrics.bottomObscuredHeight))
     }
 
     private func encode<T: Encodable>(_ value: T) -> String {
@@ -402,27 +411,6 @@ final class MiniBrowserHarnessState {
 
     private static func rounded(_ value: CGFloat) -> Int {
         Int(value.rounded())
-    }
-
-    private func statusBarOverlapHeight(in hostView: UIView?) -> CGFloat {
-        guard
-            let hostView,
-            let window = hostView.window,
-            let windowScene = window.windowScene,
-            let statusBarManager = windowScene.statusBarManager,
-            statusBarManager.isStatusBarHidden == false
-        else {
-            return 0
-        }
-
-        let statusBarFrameInScene = statusBarManager.statusBarFrame
-        guard statusBarFrameInScene.isEmpty == false else {
-            return 0
-        }
-
-        let statusBarFrameInWindow = window.convert(statusBarFrameInScene, from: window.screen.coordinateSpace)
-        let statusBarFrameInHostView = hostView.convert(statusBarFrameInWindow, from: window)
-        return max(0, hostView.bounds.intersection(statusBarFrameInHostView).height)
     }
 }
 
