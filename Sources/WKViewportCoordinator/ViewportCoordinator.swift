@@ -143,16 +143,49 @@ public protocol ViewportMetricsProvider {
 public final class NavigationControllerViewportMetricsProvider: ViewportMetricsProvider {
     public init() {}
 
+    static func resolvedTopObscuredHeight(
+        safeAreaInsets: UIEdgeInsets,
+        statusBarOverlapHeight: CGFloat
+    ) -> CGFloat {
+        max(safeAreaInsets.top, statusBarOverlapHeight)
+    }
+
+    static func visibleStatusBarOverlapHeight(in hostView: UIView?) -> CGFloat {
+        guard
+            let hostView,
+            let window = hostView.window,
+            let windowScene = window.windowScene,
+            let statusBarManager = windowScene.statusBarManager,
+            statusBarManager.isStatusBarHidden == false
+        else {
+            return 0
+        }
+
+        let statusBarFrameInScene = statusBarManager.statusBarFrame
+        guard statusBarFrameInScene.isEmpty == false else {
+            return 0
+        }
+
+        let statusBarFrameInWindow = window.convert(statusBarFrameInScene, from: window.screen.coordinateSpace)
+        let statusBarFrameInHostView = hostView.convert(statusBarFrameInWindow, from: window)
+        return max(0, hostView.bounds.intersection(statusBarFrameInHostView).height)
+    }
+
     public func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat
     ) -> ViewportMetrics {
-        let safeAreaInsets = hostViewController.viewIfLoaded?.safeAreaInsets ?? .zero
+        let hostView = hostViewController.viewIfLoaded
+        let safeAreaInsets = hostView?.safeAreaInsets ?? .zero
+        let topObscuredHeight = Self.resolvedTopObscuredHeight(
+            safeAreaInsets: safeAreaInsets,
+            statusBarOverlapHeight: Self.visibleStatusBarOverlapHeight(in: hostView)
+        )
         return ViewportMetrics(
             safeAreaInsets: safeAreaInsets,
-            topObscuredHeight: safeAreaInsets.top,
+            topObscuredHeight: topObscuredHeight,
             bottomObscuredHeight: safeAreaInsets.bottom,
             keyboardOverlapHeight: keyboardOverlapHeight,
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,

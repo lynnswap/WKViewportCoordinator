@@ -1,4 +1,6 @@
+import Darwin
 import XCTest
+import notify
 
 final class MiniBrowserUITests: XCTestCase {
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
@@ -12,11 +14,14 @@ final class MiniBrowserUITests: XCTestCase {
     @MainActor
     @available(iOS 26.0, *)
     func testViewportCoordinatorMaintainsViewportAcrossScenarioAndLifecycleChanges() throws {
-        let app = launchApp()
+        let commandSessionID = UUID().uuidString
+        let app = launchApp(commandSessionID: commandSessionID)
+        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
 
         let initialNative = try nativeMetrics(in: app)
         let initialPage = try pageMetrics(in: app)
         XCTAssertEqual(initialNative.scenario, "standard")
+        XCTAssertEqual(initialNative.chromeMode, HarnessCommand.ChromeMode.navigationBarHidden.rawValue)
         XCTAssertTrue(initialNative.attached)
         XCTAssertTrue(initialNative.windowAttached)
         XCTAssertEqual(initialNative.obscuredTop, initialNative.expectedTop)
@@ -25,14 +30,38 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertGreaterThan(initialNative.effectiveBottom, 0)
         XCTAssertGreaterThanOrEqual(initialPage.topMarkerTop, 0)
 
-        tapButton("harness.action.toggleAttachment", fallbackTitles: ["Detach", "Attach"], in: app)
-        let detached = try nextNativeMetrics(after: initialNative.revision, in: app)
+        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
+        let chromeVisibleNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.revision > initialNative.revision
+            }
+        )
+        let chromeVisiblePage = try pageMetrics(in: app, matching: { $0.revision > initialPage.revision })
+        XCTAssertGreaterThan(chromeVisibleNative.expectedTop, initialNative.expectedTop)
+        XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
+
+        postCommand(.setChromeMode(.navigationBarHidden), sessionID: commandSessionID)
+        let chromeHiddenNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarHidden.rawValue
+                    && $0.revision > chromeVisibleNative.revision
+            }
+        )
+        let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
+        XCTAssertGreaterThan(chromeHiddenPage.revision, chromeVisiblePage.revision)
+
+        postCommand(.setAttachment(.detached), sessionID: commandSessionID)
+        let detached = try nextNativeMetrics(after: chromeHiddenNative.revision, in: app)
         XCTAssertFalse(detached.attached)
         XCTAssertFalse(detached.windowAttached)
         XCTAssertEqual(detached.expectedTop, 0)
         XCTAssertEqual(detached.expectedBottom, 0)
 
-        tapButton("harness.action.toggleAttachment", fallbackTitles: ["Detach", "Attach"], in: app)
+        postCommand(.setAttachment(.attached), sessionID: commandSessionID)
         let reattached = try nextNativeMetrics(after: detached.revision, in: app)
         XCTAssertTrue(reattached.attached)
         XCTAssertTrue(reattached.windowAttached)
@@ -41,21 +70,22 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertGreaterThan(reattached.effectiveTop, 0)
         XCTAssertGreaterThan(reattached.effectiveBottom, 0)
 
-        selectScenario("Never Adjustment", expectedRawValue: "neverAdjustment", in: app)
+        postCommand(.setScenario(.neverAdjustment), sessionID: commandSessionID)
         let neverNative = try nativeMetrics(
             in: app,
             matching: { $0.scenario == "neverAdjustment" && $0.revision > reattached.revision }
         )
+        let neverPage = try pageMetrics(in: app, matching: { $0.revision > chromeHiddenPage.revision })
         XCTAssertEqual(neverNative.effectiveTop, neverNative.obscuredTop)
         XCTAssertEqual(neverNative.effectiveBottom, neverNative.obscuredBottom)
         XCTAssertLessThanOrEqual(neverNative.adjustedTop, neverNative.effectiveTop)
         XCTAssertLessThanOrEqual(neverNative.adjustedBottom, neverNative.effectiveBottom)
 
-        selectScenario("Exclude Top Safe Area", expectedRawValue: "excludeTopSafeArea", in: app)
-        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > initialPage.revision })
-        XCTAssertLessThan(excludedPage.topMarkerTop, initialPage.topMarkerTop)
+        postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
+        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
+        XCTAssertLessThan(excludedPage.topMarkerTop, chromeHiddenPage.topMarkerTop)
 
-        selectScenario("Standard", expectedRawValue: "standard", in: app)
+        postCommand(.setScenario(.standard), sessionID: commandSessionID)
         let restoredStandard = try nativeMetrics(
             in: app,
             matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
@@ -64,7 +94,7 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
         XCTAssertEqual(restoredStandard.obscuredBottom, restoredStandard.expectedBottom)
 
-        tapButton("harness.action.focusBottomInput", fallbackTitles: ["Focus"], in: app)
+        postCommand(.focusBottomInput, sessionID: commandSessionID)
         let focusedPage = try pageMetrics(
             in: app,
             matching: { $0.activeElement == "bottom-input" && $0.revision > excludedPage.revision }
@@ -76,11 +106,62 @@ final class MiniBrowserUITests: XCTestCase {
     }
 }
 
+@MainActor
 private extension MiniBrowserUITests {
+    enum HarnessCommand {
+        private static let allowedSessionCharacters = CharacterSet.alphanumerics.union(
+            CharacterSet(charactersIn: "-_")
+        )
+
+        enum Scenario: String {
+            case standard
+            case neverAdjustment
+            case excludeTopSafeArea
+        }
+
+        enum ChromeMode: String {
+            case navigationBarVisible
+            case navigationBarHidden
+        }
+
+        enum Attachment: String {
+            case attached
+            case detached
+        }
+
+        case setScenario(Scenario)
+        case setChromeMode(ChromeMode)
+        case setAttachment(Attachment)
+        case reloadFixture
+        case focusBottomInput
+
+        func notificationName(for sessionID: String) -> String {
+            let prefix = "wkviewport.minibrowser.command"
+            let encodedSessionID = Self.encodeSessionID(sessionID)
+            switch self {
+            case .setScenario(let scenario):
+                return "\(prefix).\(encodedSessionID).setScenario.\(scenario.rawValue)"
+            case .setChromeMode(let chromeMode):
+                return "\(prefix).\(encodedSessionID).setChromeMode.\(chromeMode.rawValue)"
+            case .setAttachment(let attachment):
+                return "\(prefix).\(encodedSessionID).setAttachment.\(attachment.rawValue)"
+            case .reloadFixture:
+                return "\(prefix).\(encodedSessionID).reloadFixture"
+            case .focusBottomInput:
+                return "\(prefix).\(encodedSessionID).focusBottomInput"
+            }
+        }
+
+        private static func encodeSessionID(_ sessionID: String) -> String {
+            sessionID.addingPercentEncoding(withAllowedCharacters: allowedSessionCharacters) ?? sessionID
+        }
+    }
+
     struct NativeMetrics: Decodable {
         let status: String
         let revision: Int
         let scenario: String
+        let chromeMode: String
         let attached: Bool
         let windowAttached: Bool
         let obscuredTop: Int
@@ -102,43 +183,31 @@ private extension MiniBrowserUITests {
         let viewportHeight: Int
     }
 
-    func launchApp() -> XCUIApplication {
+    func launchApp(commandSessionID: String) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["MINIBROWSER_COMMAND_SESSION"] = commandSessionID
         app.launch()
         return app
     }
 
-    func tapButton(_ identifier: String, fallbackTitles: [String] = [], in app: XCUIApplication) {
-        let candidates = [app.buttons[identifier]] + fallbackTitles.map { app.buttons[$0] }
-
-        for button in candidates where button.waitForExistence(timeout: 2) {
-            button.tap()
-            return
-        }
-
-        XCTFail("Missing button: \(identifier)")
-    }
-
-    func selectScenario(_ title: String, expectedRawValue: String, in app: XCUIApplication) {
-        tapButton("harness.action.scenarioMenu", in: app)
-
-        let predicate = NSPredicate(format: "label == %@", title)
-        let deadline = Date().addingTimeInterval(3)
+    func waitForCommandReceiverReady(in app: XCUIApplication, sessionID: String) throws {
+        let deadline = Date().addingTimeInterval(10)
 
         while Date() < deadline {
-            let elements = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
-            if let element = elements.first(where: \.isHittable) {
-                element.tap()
-                XCTAssertEqual(
-                    (try? nativeMetrics(in: app, matching: { $0.scenario == expectedRawValue }))?.scenario,
-                    expectedRawValue
-                )
+            if probeValue(identifier: "harness.command.ready", in: app) == sessionID {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
 
-        XCTFail("Missing scenario action: \(title)")
+        XCTFail("Timed out waiting for command receiver readiness")
+        throw NSError(domain: "MiniBrowserUITests", code: 2, userInfo: nil)
+    }
+
+    func postCommand(_ command: HarnessCommand, sessionID: String) {
+        let notificationName = command.notificationName(for: sessionID)
+        let status = notify_post(notificationName)
+        XCTAssertEqual(status, UInt32(NOTIFY_STATUS_OK), "Failed to post command: \(notificationName)")
     }
 
     func nativeMetrics(
