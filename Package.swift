@@ -11,7 +11,8 @@ let strictSwiftSettings: [SwiftSetting] = [
 let package = Package(
     name: "WKViewportCoordinator",
     platforms: [
-        .iOS(.v18)
+        .iOS(.v18),
+        .macOS(.v15)
     ],
     products: [
         .library(

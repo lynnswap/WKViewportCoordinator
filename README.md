@@ -1,10 +1,11 @@
 # WKViewportCoordinator
 
-`WKWebView` viewport coordination for iOS.
+`WKWebView` viewport coordination.
 
 ## Overview
 
 - iOS 18+
+- macOS 15+
 - Swift 6.2+
 - `WKWebView`-based viewport management with keyboard and safe-area coordination
 - Private WebKit/UIKit selectors are used internally
@@ -30,8 +31,32 @@ final class BrowserViewController: UIViewController {
 
 `ManagedViewportWebView` is available when you prefer a `WKWebView` subclass that forwards lifecycle updates automatically.
 
+If you attach `ViewportCoordinator` to your own `WKWebView` subclass, forward the relevant lifecycle hooks:
+
+```swift
+final class CustomViewportWebView: WKWebView {
+    weak var viewportCoordinator: ViewportCoordinator?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
+}
+```
+
+Call `handleViewDidAppear()` from the host view controller when you need an explicit refresh after presentation.
+
 ## Notes
 
 - The module name is `WKViewportCoordinator`.
 - Public type names are unchanged from the former `WKViewport` target.
-- This package is intentionally standalone and does not depend on `WebInspectorKit`.
