@@ -513,6 +513,33 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    @available(iOS 26.0, *)
+    func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        weak var releasedCoordinator: ViewportCoordinator?
+        do {
+            let coordinator = ViewportCoordinator(webView: webView)
+            releasedCoordinator = coordinator
+            #expect(webView.obscuredContentInsets.top > 0)
+            #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        }
+
+        #expect(releasedCoordinator == nil)
+        #expect(webView.obscuredContentInsets == .zero)
+        #expect(hostViewController.contentScrollView(for: .top) == nil)
+        #expect(hostViewController.contentScrollView(for: .bottom) == nil)
+    }
+
+    @Test
     func viewportSPIBridgeFallbackNoOpsWhenSelectorsAreUnavailable() {
         let plainObject = NSObject()
         let resolvedMetrics = ResolvedViewportMetrics(

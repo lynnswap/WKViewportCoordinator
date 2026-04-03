@@ -165,14 +165,11 @@ private extension MiniBrowserUITests {
         as type: T.Type,
         predicate: @escaping (T) -> Bool
     ) throws -> T {
-        let element = probeElement(identifier: identifier, in: app)
-        XCTAssertTrue(element.waitForExistence(timeout: 5), "Missing accessibility probe: \(identifier)")
-
         let deadline = Date().addingTimeInterval(10)
         let decoder = JSONDecoder()
 
         while Date() < deadline {
-            if let rawValue = element.value as? String,
+            if let rawValue = probeValue(identifier: identifier, in: app),
                let data = rawValue.data(using: .utf8),
                let decoded = try? decoder.decode(T.self, from: data),
                predicate(decoded) {
@@ -185,16 +182,16 @@ private extension MiniBrowserUITests {
         throw NSError(domain: "MiniBrowserUITests", code: 1, userInfo: nil)
     }
 
-    func probeElement(identifier: String, in app: XCUIApplication) -> XCUIElement {
-        let candidates = [
+    func probeValue(identifier: String, in app: XCUIApplication) -> String? {
+        for element in [
             app.otherElements[identifier],
             app.staticTexts[identifier]
-        ]
-
-        for element in candidates where element.exists {
-            return element
+        ] where element.exists {
+            if let rawValue = element.value as? String {
+                return rawValue
+            }
         }
 
-        return candidates[0]
+        return nil
     }
 }

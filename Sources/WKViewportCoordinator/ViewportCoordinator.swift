@@ -252,8 +252,8 @@ public final class ViewportCoordinator: NSObject {
         )
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
+    isolated deinit {
+        tearDownViewportCoordination(resetViewport: true)
     }
 
     public func handleViewDidAppear() {
@@ -357,6 +357,10 @@ public final class ViewportCoordinator: NSObject {
     }
 
     public func invalidate() {
+        tearDownViewportCoordination(resetViewport: true)
+    }
+
+    private func tearDownViewportCoordination(resetViewport: Bool) {
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
         clearObservationViewIfNeeded()
@@ -365,9 +369,13 @@ public final class ViewportCoordinator: NSObject {
             return
         }
 
-        resetAppliedViewportInsets(on: webView)
+        if resetViewport {
+            resetAppliedViewportInsets(on: webView)
+        }
         clearObservedScrollViewIfNeeded(on: observedHostViewController ?? hostViewController, webView: webView)
         observedHostViewController = nil
+        lastAppliedResolvedMetrics = nil
+        lastKnownWindowScreen = nil
     }
 
     private func applyScrollViewConfiguration(to scrollView: UIScrollView) {
