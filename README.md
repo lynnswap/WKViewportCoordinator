@@ -59,4 +59,4 @@ Call `handleViewDidAppear()` from the host view controller when you need an expl
 ## Notes
 
 - The module name is `WKViewportCoordinator`.
-- Public type names are unchanged from the former `WKViewport` target.
+- Public API types include `ViewportCoordinator`, `ManagedViewportWebView`, `ViewportConfiguration`, and `ViewportMetricsProvider`.
