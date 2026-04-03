@@ -55,8 +55,3 @@ final class CustomViewportWebView: WKWebView {
 ```
 
 Call `handleViewDidAppear()` from the host view controller when you need an explicit refresh after presentation.
-
-## Notes
-
-- The module name is `WKViewportCoordinator`.
-- Public API types include `ViewportCoordinator`, `ManagedViewportWebView`, `ViewportConfiguration`, and `ViewportMetricsProvider`.
