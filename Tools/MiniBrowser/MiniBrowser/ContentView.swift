@@ -1,21 +1,11 @@
-//
-//  ContentView.swift
-//  MiniBrowser
-//
-//  Created by Kazuki Nakashima on 2026/04/03.
-//
-
 import SwiftUI
 
 struct ContentView: View {
+    @State private var state = MiniBrowserHarnessState()
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        MiniBrowserHarnessContainer(state: state)
+            .ignoresSafeArea()
     }
 }
 

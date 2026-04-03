@@ -86,8 +86,13 @@ struct ResolvedViewportMetrics: Equatable {
     let obscuredInsets: UIEdgeInsets
     let unobscuredSafeAreaInsets: UIEdgeInsets
     let safeAreaAffectedEdges: UIRectEdge
+    let contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
 
-    init(state: ViewportMetrics, screenScale: CGFloat) {
+    init(
+        state: ViewportMetrics,
+        contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior,
+        screenScale: CGFloat
+    ) {
         safeAreaInsets = state.safeAreaInsets.wk_roundedToPixel(screenScale)
         obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
         unobscuredSafeAreaInsets = UIEdgeInsets(
@@ -97,15 +102,25 @@ struct ResolvedViewportMetrics: Equatable {
             right: max(0, safeAreaInsets.right - obscuredInsets.right)
         )
         safeAreaAffectedEdges = state.safeAreaAffectedEdges
+        self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
     }
 
     var contentScrollInsetFallback: UIEdgeInsets {
-        UIEdgeInsets(
-            top: max(0, obscuredInsets.top - safeAreaInsets.top),
-            left: max(0, obscuredInsets.left - safeAreaInsets.left),
-            bottom: max(0, obscuredInsets.bottom - safeAreaInsets.bottom),
-            right: max(0, obscuredInsets.right - safeAreaInsets.right)
+        let safeAreaInsetContribution = safeAreaInsetContributionForFallback
+        return UIEdgeInsets(
+            top: max(0, obscuredInsets.top - safeAreaInsetContribution.top),
+            left: max(0, obscuredInsets.left - safeAreaInsetContribution.left),
+            bottom: max(0, obscuredInsets.bottom - safeAreaInsetContribution.bottom),
+            right: max(0, obscuredInsets.right - safeAreaInsetContribution.right)
         )
+    }
+
+    private var safeAreaInsetContributionForFallback: UIEdgeInsets {
+        guard contentInsetAdjustmentBehavior != .never else {
+            return .zero
+        }
+
+        return safeAreaInsets
     }
 }
 
@@ -165,6 +180,8 @@ public final class ViewportCoordinator: NSObject {
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedResolvedMetrics: ResolvedViewportMetrics?
     private var observationView: ViewportObservationView?
+    private var observationViewConstraints: [NSLayoutConstraint] = []
+    private var lastKnownWindowScreen: UIScreen?
     private weak var observedHostViewController: UIViewController?
     private var webViewStateCancellables: Set<AnyCancellable> = []
 #if DEBUG
@@ -174,6 +191,10 @@ public final class ViewportCoordinator: NSObject {
 #if DEBUG
     var resolvedMetricsForTesting: ResolvedViewportMetrics? {
         lastAppliedResolvedMetrics
+    }
+
+    var keyboardFrameInScreenForTesting: CGRect {
+        keyboardFrameInScreen
     }
 
     var hasObservationViewForTesting: Bool {
@@ -235,7 +256,13 @@ public final class ViewportCoordinator: NSObject {
     }
 
     public func handleWebViewHierarchyDidChange() {
-        keyboardFrameInScreen = .null
+        let currentScreen = webView?.window?.screen
+        if let currentScreen, let lastKnownWindowScreen, lastKnownWindowScreen !== currentScreen {
+            keyboardFrameInScreen = .null
+        }
+        if let currentScreen {
+            lastKnownWindowScreen = currentScreen
+        }
         updateViewport()
     }
 
@@ -248,8 +275,12 @@ public final class ViewportCoordinator: NSObject {
         guard let webView else {
             return
         }
-        guard let observationContainerView = resolvedObservationContainerView() else {
-            clearTransientViewportStateIfNeeded(
+        guard
+            let observationContainerView = resolvedObservationContainerView(),
+            observationContainerView.window != nil,
+            webView.window != nil
+        else {
+            clearInactiveViewportStateIfNeeded(
                 resolvedHostViewController: resolvedHostViewController(),
                 webView: webView
             )
@@ -259,18 +290,25 @@ public final class ViewportCoordinator: NSObject {
         installObservationViewIfPossible(in: observationContainerView)
         let resolvedHostViewController = resolvedHostViewController()
 
-        guard let resolvedHostViewController, resolvedHostViewController.view != nil else {
-            clearHostResolutionStateIfNeeded(webView: webView)
+        guard
+            let hostViewController = resolvedHostViewController,
+            hostViewController.view != nil,
+            hostViewController.view.window != nil
+        else {
+            clearInactiveViewportStateIfNeeded(
+                resolvedHostViewController: resolvedHostViewController,
+                webView: webView
+            )
             return
         }
 
-        updateObservedHostViewControllerIfNeeded(resolvedHostViewController, webView: webView)
+        updateObservedHostViewControllerIfNeeded(hostViewController, webView: webView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
-        resolvedHostViewController.setContentScrollView(webView.scrollView)
+        hostViewController.setContentScrollView(webView.scrollView)
 
         var effectiveMetrics = metricsProvider.makeViewportMetrics(
-            in: resolvedHostViewController,
+            in: hostViewController,
             webView: webView,
             keyboardOverlapHeight: keyboardOverlapHeight(),
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight()
@@ -280,8 +318,10 @@ public final class ViewportCoordinator: NSObject {
         let screenScale = observationContainerView.window?.screen.scale
             ?? webView.window?.screen.scale
             ?? observationContainerView.traitCollection.displayScale
+        lastKnownWindowScreen = observationContainerView.window?.screen ?? webView.window?.screen
         let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
+            contentInsetAdjustmentBehavior: configuration.contentInsetAdjustmentBehavior,
             screenScale: screenScale
         )
         guard resolvedMetrics != lastAppliedResolvedMetrics else {
@@ -320,6 +360,7 @@ public final class ViewportCoordinator: NSObject {
             return
         }
 
+        resetAppliedViewportInsets(on: webView)
         clearObservedScrollViewIfNeeded(on: observedHostViewController ?? hostViewController, webView: webView)
         observedHostViewController = nil
     }
@@ -369,12 +410,14 @@ public final class ViewportCoordinator: NSObject {
         hostView.addSubview(observationView)
         hostView.sendSubviewToBack(observationView)
 
-        NSLayoutConstraint.activate([
+        let constraints = [
             observationView.topAnchor.constraint(equalTo: hostView.topAnchor),
             observationView.leadingAnchor.constraint(equalTo: hostView.leadingAnchor),
             observationView.trailingAnchor.constraint(equalTo: hostView.trailingAnchor),
             observationView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor)
-        ])
+        ]
+        observationViewConstraints = constraints
+        NSLayoutConstraint.activate(constraints)
 
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
@@ -384,7 +427,7 @@ public final class ViewportCoordinator: NSObject {
         webView?.superview
     }
 
-    private func clearTransientViewportStateIfNeeded(
+    private func clearInactiveViewportStateIfNeeded(
         resolvedHostViewController: UIViewController?,
         webView: WKWebView
     ) {
@@ -397,19 +440,22 @@ public final class ViewportCoordinator: NSObject {
         clearObservationViewIfNeeded()
     }
 
-    private func clearHostResolutionStateIfNeeded(webView: WKWebView) {
-        clearObservedScrollViewIfNeeded(
-            on: observedHostViewController ?? hostViewController,
-            webView: webView
-        )
-        observedHostViewController = nil
-        lastAppliedResolvedMetrics = nil
-    }
-
     private func clearObservationViewIfNeeded() {
+        NSLayoutConstraint.deactivate(observationViewConstraints)
+        observationViewConstraints.removeAll()
         observationView?.onViewportGeometryChanged = nil
         observationView?.removeFromSuperview()
         observationView = nil
+    }
+
+    private func resetAppliedViewportInsets(on webView: WKWebView) {
+        if #available(iOS 26.0, *) {
+            webView.obscuredContentInsets = .zero
+            ViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: webView)
+            ViewportSPIBridge.apply(obscuredSafeAreaEdges: [], to: webView)
+        } else {
+            _ = ViewportSPIBridge.applyContentScrollInsetFallback(.zero, to: webView.scrollView, webView: webView)
+        }
     }
 
     private func resolvedHostViewController() -> UIViewController? {

@@ -18,6 +18,7 @@ struct ViewportCoordinatorTests {
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
             ),
+            contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
 
@@ -30,6 +31,7 @@ struct ViewportCoordinatorTests {
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
             ),
+            contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
 
@@ -282,7 +284,7 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
-    func coordinatorClearsObservedScrollViewWhenHostResolutionFails() {
+    func coordinatorClearsObservedScrollViewAndObservationWhenWebViewBecomesWindowless() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         let hostedConstraints = attach(webView, to: hostViewController.view)
@@ -303,7 +305,39 @@ struct ViewportCoordinatorTests {
 
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
-        #expect(coordinator.observationSuperviewForTesting === orphanContainer)
+        #expect(coordinator.observationSuperviewForTesting == nil)
+        #expect(coordinator.resolvedMetricsForTesting == nil)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorReattachesHostedScrollViewAfterWindowlessTransition() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let hostedConstraints = attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let orphanContainer = UIView()
+        NSLayoutConstraint.deactivate(hostedConstraints)
+        webView.removeFromSuperview()
+        let orphanConstraints = attach(webView, to: orphanContainer)
+        coordinator.handleWebViewHierarchyDidChange()
+
+        NSLayoutConstraint.deactivate(orphanConstraints)
+        webView.removeFromSuperview()
+        attach(webView, to: hostViewController.view)
+        hostViewController.view.layoutIfNeeded()
+        coordinator.handleWebViewHierarchyDidChange()
+
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
+        #expect(coordinator.observationSuperviewForTesting === hostViewController.view)
         coordinator.invalidate()
     }
 
@@ -363,6 +397,32 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorPreservesKeyboardFrameAcrossHierarchyChanges() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let keyboardFrame = CGRect(x: 0, y: 300, width: 320, height: 216)
+        NotificationCenter.default.post(
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: keyboardFrame)]
+        )
+
+        coordinator.handleWebViewHierarchyDidChange()
+
+        #expect(coordinator.keyboardFrameInScreenForTesting == keyboardFrame)
+        coordinator.invalidate()
+    }
+
+    @Test
     func resolvedMetricsDeriveContentScrollInsetFallbackFromSafeAreaDelta() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
@@ -373,12 +433,83 @@ struct ViewportCoordinatorTests {
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
             ),
+            contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
 
         #expect(
             resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
         )
+    }
+
+    @Test
+    func resolvedMetricsKeepSafeAreaInsetWhenAdjustmentBehaviorIsNever() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .never,
+            screenScale: 3
+        )
+
+        #expect(
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 103, left: 0, bottom: 88, right: 0)
+        )
+    }
+
+    @Test
+    func resolvedMetricsIgnoreSafeAreaSubtractionForEdgesOutsideSafeAreaHandling() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal,
+                safeAreaAffectedEdges: [.bottom]
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
+        )
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func coordinatorKeepsAppliedObscuredInsetsUntilInvalidateWhenWebViewDetaches() async throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let constraints = attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        #expect(webView.obscuredContentInsets.top > 0)
+
+        NSLayoutConstraint.deactivate(constraints)
+        let orphanContainer = UIView()
+        attach(webView, to: orphanContainer)
+        coordinator.handleWebViewHierarchyDidChange()
+        try await Task.sleep(for: .milliseconds(10))
+
+        #expect(webView.obscuredContentInsets.top > 0)
+        #expect(hostViewController.contentScrollView(for: .top) == nil)
+        #expect(coordinator.observationSuperviewForTesting == nil)
+        coordinator.invalidate()
+        #expect(webView.obscuredContentInsets == .zero)
     }
 
     @Test
@@ -393,6 +524,7 @@ struct ViewportCoordinatorTests {
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
             ),
+            contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
 
@@ -421,6 +553,7 @@ struct ViewportCoordinatorTests {
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
             ),
+            contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
 

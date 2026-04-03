@@ -1,18 +1,14 @@
-//
-//  MiniBrowserTests.swift
-//  MiniBrowserTests
-//
-//  Created by Kazuki Nakashima on 2026/04/03.
-//
-
+import Foundation
 import Testing
 
 struct MiniBrowserTests {
+    @Test
+    func viewportFixtureExistsInSourceTree() {
+        let fileURL = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "MiniBrowser/ViewportFixture.html")
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
     }
-
 }

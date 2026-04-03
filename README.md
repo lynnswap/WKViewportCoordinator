@@ -5,10 +5,10 @@
 ## Overview
 
 - iOS 18+
-- macOS 15+
 - Swift 6.2+
 - `WKWebView`-based viewport management with keyboard and safe-area coordination
-- Private WebKit/UIKit selectors are used internally
+
+> This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
 
 ## Usage
 

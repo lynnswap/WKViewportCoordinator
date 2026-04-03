@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>ViewportFixture</title>
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px 16px 0;
+            background: #f6f7fb;
+            color: #1f2937;
+        }
+
+        .stack {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            border-radius: 18px;
+            padding: 16px;
+            background: white;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        }
+
+        .spacer {
+            height: 1200px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(59, 130, 246, 0.10), rgba(14, 165, 233, 0.22));
+        }
+
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 52px;
+            border-radius: 14px;
+            border: 1px solid #cbd5e1;
+            padding: 12px 14px;
+            font-size: 17px;
+        }
+    </style>
+</head>
+<body>
+    <main class="stack">
+        <section class="card" id="top-marker">
+            <strong>Top Marker</strong>
+            <p>This fixture is bundled locally for WKViewportCoordinator UI tests.</p>
+            <input id="top-input" type="text" value="Top Input">
+        </section>
+        <div class="spacer"></div>
+        <section class="card" id="bottom-marker">
+            <strong>Bottom Marker</strong>
+            <p>Focus this field from the host app without performing network access.</p>
+            <input id="bottom-input" type="text" value="Bottom Input">
+        </section>
+    </main>
+    <script>
+        const waitForTwoFrames = () => new Promise((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+        });
+
+        const buildState = () => {
+            const activeElement = document.activeElement?.id || "none";
+            const topMarker = document.getElementById("top-marker");
+            const bottomInput = document.getElementById("bottom-input");
+            const topRect = topMarker.getBoundingClientRect();
+            const bottomRect = bottomInput.getBoundingClientRect();
+            const viewportHeight = Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight);
+            return JSON.stringify({
+                status: "ready",
+                revision: 0,
+                activeElement,
+                topMarkerTop: Math.round(topRect.top),
+                topMarkerBottom: Math.round(topRect.bottom),
+                bottomInputTop: Math.round(bottomRect.top),
+                bottomInputBottom: Math.round(bottomRect.bottom),
+                viewportHeight,
+                bottomWithinViewport: Math.round(bottomRect.bottom) <= viewportHeight,
+                errorMessage: null
+            });
+        };
+
+        window.testHarness = {
+            async reportState() {
+                await waitForTwoFrames();
+                return buildState();
+            },
+            async focusInput(identifier) {
+                const input = document.getElementById(identifier);
+                if (input) {
+                    input.focus();
+                }
+                await waitForTwoFrames();
+                return buildState();
+            }
+        };
+    </script>
+</body>
+</html>
