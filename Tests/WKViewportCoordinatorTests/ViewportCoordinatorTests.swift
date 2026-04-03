@@ -71,6 +71,49 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func navigationMetricsProviderResolvedTopObscuredHeightKeepsHostSafeAreaWhenLarger() {
+        let safeAreaInsets = UIEdgeInsets(top: 64, left: 0, bottom: 34, right: 0)
+
+        #expect(
+            NavigationControllerViewportMetricsProvider.resolvedTopObscuredHeight(
+                safeAreaInsets: safeAreaInsets,
+                statusBarOverlapHeight: 20
+            ) == 64
+        )
+    }
+
+    @Test
+    func navigationMetricsProviderResolvedTopObscuredHeightFallsBackToStatusBarOverlap() {
+        let safeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 0)
+
+        #expect(
+            NavigationControllerViewportMetricsProvider.resolvedTopObscuredHeight(
+                safeAreaInsets: safeAreaInsets,
+                statusBarOverlapHeight: 20
+            ) == 20
+        )
+    }
+
+    @Test
+    func navigationMetricsProviderResolvedTopObscuredHeightReturnsZeroWhenTopInputsAreUnavailable() {
+        let safeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 0)
+
+        #expect(
+            NavigationControllerViewportMetricsProvider.resolvedTopObscuredHeight(
+                safeAreaInsets: safeAreaInsets,
+                statusBarOverlapHeight: 0
+            ) == 0
+        )
+    }
+
+    @Test
+    func navigationMetricsProviderVisibleStatusBarOverlapReturnsZeroWithoutWindow() {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+
+        #expect(NavigationControllerViewportMetricsProvider.visibleStatusBarOverlapHeight(in: view) == 0)
+    }
+
+    @Test
     func coordinatorInstallsObservationViewWhenHostViewLoadsAfterInitialization() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -677,6 +720,7 @@ private struct HostingWebViewRepresentable: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
+@MainActor
 @discardableResult
 private func attach(_ webView: WKWebView, to containerView: UIView) -> [NSLayoutConstraint] {
     webView.translatesAutoresizingMaskIntoConstraints = false
