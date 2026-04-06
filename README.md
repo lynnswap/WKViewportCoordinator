@@ -18,20 +18,19 @@ import WebKit
 import WKViewportCoordinator
 
 final class BrowserViewController: UIViewController {
-    let webView = WKWebView(frame: .zero)
-    var viewportCoordinator: ViewportCoordinator?
+    let webView = ManagedViewportWebView(frame: .zero, configuration: WKWebViewConfiguration())
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addSubview(webView)
-        viewportCoordinator = ViewportCoordinator(webView: webView)
+        webView.viewportHostViewController = self
     }
 }
 ```
 
-`ManagedViewportWebView` is available when you prefer a `WKWebView` subclass that forwards lifecycle updates automatically.
+`ManagedViewportWebView` is the preferred integration path because it forwards hierarchy and safe-area lifecycle updates automatically.
 
-If you attach `ViewportCoordinator` to your own `WKWebView` subclass, forward the relevant lifecycle hooks:
+If you attach `ViewportCoordinator` to your own `WKWebView` subclass, you must forward the relevant lifecycle hooks:
 
 ```swift
 final class CustomViewportWebView: WKWebView {

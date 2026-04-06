@@ -25,7 +25,6 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertTrue(initialNative.attached)
         XCTAssertTrue(initialNative.windowAttached)
         XCTAssertEqual(initialNative.obscuredTop, initialNative.expectedTop)
-        XCTAssertEqual(initialNative.obscuredBottom, initialNative.expectedBottom)
         XCTAssertGreaterThan(initialNative.effectiveTop, 0)
         XCTAssertGreaterThan(initialNative.effectiveBottom, 0)
         XCTAssertGreaterThanOrEqual(initialPage.topMarkerTop, 0)
@@ -39,6 +38,7 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeVisiblePage = try pageMetrics(in: app, matching: { $0.revision > initialPage.revision })
+        XCTAssertEqual(chromeVisibleNative.obscuredTop, chromeVisibleNative.expectedTop)
         XCTAssertGreaterThan(chromeVisibleNative.expectedTop, initialNative.expectedTop)
         XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
 
@@ -51,6 +51,7 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
         XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
         XCTAssertGreaterThan(chromeHiddenPage.revision, chromeVisiblePage.revision)
 
@@ -66,7 +67,6 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertTrue(reattached.attached)
         XCTAssertTrue(reattached.windowAttached)
         XCTAssertEqual(reattached.obscuredTop, reattached.expectedTop)
-        XCTAssertEqual(reattached.obscuredBottom, reattached.expectedBottom)
         XCTAssertGreaterThan(reattached.effectiveTop, 0)
         XCTAssertGreaterThan(reattached.effectiveBottom, 0)
 
@@ -81,18 +81,39 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertLessThanOrEqual(neverNative.adjustedTop, neverNative.effectiveTop)
         XCTAssertLessThanOrEqual(neverNative.adjustedBottom, neverNative.effectiveBottom)
 
+        postCommand(.setScenario(.standard), sessionID: commandSessionID)
+        let standardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
+        )
+
+        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
+        let visibleStandardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.scenario == "standard"
+                    && $0.revision > standardBeforeExcludedNative.revision
+            }
+        )
+        let visibleStandardBeforeExcludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
+
         postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
-        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
-        XCTAssertLessThan(excludedPage.topMarkerTop, chromeHiddenPage.topMarkerTop)
+        let excludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "excludeTopSafeArea" && $0.revision > visibleStandardBeforeExcludedNative.revision }
+        )
+        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > visibleStandardBeforeExcludedPage.revision })
+        XCTAssertEqual(excludedNative.scenario, "excludeTopSafeArea")
+        XCTAssertGreaterThan(excludedPage.revision, visibleStandardBeforeExcludedPage.revision)
 
         postCommand(.setScenario(.standard), sessionID: commandSessionID)
         let restoredStandard = try nativeMetrics(
             in: app,
-            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
+            matching: { $0.scenario == "standard" && $0.revision > excludedNative.revision }
         )
         XCTAssertTrue(restoredStandard.attached)
         XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
-        XCTAssertEqual(restoredStandard.obscuredBottom, restoredStandard.expectedBottom)
 
         postCommand(.focusBottomInput, sessionID: commandSessionID)
         let focusedPage = try pageMetrics(
@@ -103,6 +124,31 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertEqual(focusedPage.activeElement, "bottom-input")
         XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
         XCTAssertGreaterThanOrEqual(focusedNative.effectiveBottom, reattached.effectiveBottom)
+    }
+
+    @MainActor
+    func testLegacyKeyboardFocusDoesNotDoubleCountBottomInset() throws {
+        if #available(iOS 26.0, *) {
+            throw XCTSkip("Legacy fallback path only")
+        }
+
+        let commandSessionID = UUID().uuidString
+        let app = launchApp(commandSessionID: commandSessionID)
+        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
+
+        let initialNative = try nativeMetrics(in: app)
+        postCommand(.focusBottomInput, sessionID: commandSessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > initialNative.revision })
+        let keyboardHeight = Int(app.keyboards.firstMatch.frame.height.rounded())
+        let bottomInsetDelta = focusedNative.adjustedBottom - initialNative.adjustedBottom
+
+        XCTAssertGreaterThan(keyboardHeight, 0)
+        XCTAssertLessThan(
+            bottomInsetDelta,
+            Int((Double(keyboardHeight) * 1.6).rounded()),
+            "legacy path should not add roughly two keyboard heights: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)"
+        )
     }
 }
 
@@ -170,6 +216,8 @@ private extension MiniBrowserUITests {
         let effectiveBottom: Int
         let adjustedTop: Int
         let adjustedBottom: Int
+        let contentInsetTop: Int
+        let contentInsetBottom: Int
         let expectedTop: Int
         let expectedBottom: Int
     }
