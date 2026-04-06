@@ -97,7 +97,11 @@ struct ViewportCoordinatorTests {
             metrics.topObscuredHeight
                 == max(
                     metrics.safeAreaInsets.top,
-                    topEdgeObscuredHeight(of: navigationController.navigationBar, in: try #require(webView.superview))
+                    topEdgeObscuredHeight(
+                        of: navigationController.navigationBar,
+                        in: try #require(webView.superview),
+                        extendingFrom: metrics.safeAreaInsets.top
+                    )
                 )
         )
     }
@@ -132,7 +136,13 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
-        #expect(topEdgeObscuredHeight(of: navigationController.navigationBar, in: try #require(webView.superview)) == 0)
+        #expect(
+            topEdgeObscuredHeight(
+                of: navigationController.navigationBar,
+                in: try #require(webView.superview),
+                extendingFrom: metrics.safeAreaInsets.top
+            ) == metrics.safeAreaInsets.top
+        )
         #expect(metrics.topObscuredHeight == metrics.safeAreaInsets.top)
     }
 
@@ -379,7 +389,14 @@ struct ViewportCoordinatorTests {
         #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: viewportContainer))
         #expect(
             metrics.topObscuredHeight
-                == max(metrics.safeAreaInsets.top, topEdgeObscuredHeight(of: navigationController.navigationBar, in: viewportContainer))
+                == max(
+                    metrics.safeAreaInsets.top,
+                    topEdgeObscuredHeight(
+                        of: navigationController.navigationBar,
+                        in: viewportContainer,
+                        extendingFrom: metrics.safeAreaInsets.top
+                    )
+                )
         )
         #expect(metrics.topObscuredHeight == 0)
     }
@@ -1108,7 +1125,11 @@ private func projectedWindowSafeAreaInsets(in hostView: UIView) -> UIEdgeInsets 
 }
 
 @MainActor
-private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView) -> CGFloat {
+private func topEdgeObscuredHeight(
+    of chromeView: UIView?,
+    in hostView: UIView,
+    extendingFrom leadingObscuredHeight: CGFloat = 0
+) -> CGFloat {
     guard let chromeView else {
         return 0
     }
@@ -1121,14 +1142,18 @@ private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView) 
 
     let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
     let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-    guard chromeFrameInWindow.minY <= hostFrameInWindow.minY else {
+    let leadingObscuredMaxY = hostFrameInWindow.minY + max(0, leadingObscuredHeight)
+    guard chromeFrameInWindow.minY <= leadingObscuredMaxY else {
         return 0
     }
     guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
         return 0
     }
 
-    return max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+    return max(
+        max(0, leadingObscuredHeight),
+        max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+    )
 }
 
 @MainActor

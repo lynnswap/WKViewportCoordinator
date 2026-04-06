@@ -155,7 +155,8 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
             safeAreaInsets.top,
             topEdgeObscuredHeight(
                 of: hostViewController.navigationController?.navigationBar,
-                in: hostView
+                in: hostView,
+                extendingFrom: safeAreaInsets.top
             )
         )
         let bottomObscuredHeight = max(
@@ -199,7 +200,11 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
         return navigationController.toolbar
     }
 
-    private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
+    private func topEdgeObscuredHeight(
+        of chromeView: UIView?,
+        in hostView: UIView?,
+        extendingFrom leadingObscuredHeight: CGFloat = 0
+    ) -> CGFloat {
         guard let chromeView, let hostView else {
             return 0
         }
@@ -212,14 +217,18 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard chromeFrameInWindow.minY <= hostFrameInWindow.minY else {
+        let leadingObscuredMaxY = hostFrameInWindow.minY + max(0, leadingObscuredHeight)
+        guard chromeFrameInWindow.minY <= leadingObscuredMaxY else {
             return 0
         }
         guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
             return 0
         }
 
-        return max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+        return max(
+            max(0, leadingObscuredHeight),
+            max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+        )
     }
 
     private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
