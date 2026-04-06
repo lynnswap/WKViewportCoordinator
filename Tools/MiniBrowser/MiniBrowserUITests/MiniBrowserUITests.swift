@@ -38,7 +38,8 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeVisiblePage = try pageMetrics(in: app, matching: { $0.revision > initialPage.revision })
-        XCTAssertGreaterThan(chromeVisibleNative.expectedTop, initialNative.expectedTop)
+        XCTAssertEqual(chromeVisibleNative.obscuredTop, chromeVisibleNative.expectedTop)
+        XCTAssertGreaterThanOrEqual(chromeVisibleNative.expectedTop, initialNative.expectedTop)
         XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
 
         postCommand(.setChromeMode(.navigationBarHidden), sessionID: commandSessionID)
@@ -50,7 +51,8 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
-        XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
+        XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
+        XCTAssertLessThanOrEqual(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
         XCTAssertGreaterThan(chromeHiddenPage.revision, chromeVisiblePage.revision)
 
         postCommand(.setAttachment(.detached), sessionID: commandSessionID)

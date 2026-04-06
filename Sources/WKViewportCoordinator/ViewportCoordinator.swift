@@ -212,10 +212,10 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard
-            hostFrameInWindow.intersects(chromeFrameInWindow)
-                || chromeFrameInWindow.maxY > hostFrameInWindow.minY
-        else {
+        guard chromeFrameInWindow.minY <= hostFrameInWindow.minY else {
+            return 0
+        }
+        guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
             return 0
         }
 

@@ -103,6 +103,40 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func viewportMetricsProviderIgnoresNavigationBarThatDoesNotReachTopEdge() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        hostViewController.view.addSubview(webView)
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setNavigationBarHidden(false, animated: false)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.frame = window.bounds
+        hostViewController.view.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+
+        var navigationBarFrame = navigationController.navigationBar.frame
+        navigationBarFrame.origin.y += 20
+        navigationController.navigationBar.frame = navigationBarFrame
+
+        let metrics = ViewportMetricsProvider().makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: 0,
+            inputAccessoryOverlapHeight: 0
+        )
+
+        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
+        #expect(topEdgeObscuredHeight(of: navigationController.navigationBar, in: try #require(webView.superview)) == 0)
+        #expect(metrics.topObscuredHeight == metrics.safeAreaInsets.top)
+    }
+
+    @Test
     func viewportMetricsProviderIncludesVisibleTabBarOverlap() throws {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -1087,7 +1121,10 @@ private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView) 
 
     let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
     let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-    guard hostFrameInWindow.intersects(chromeFrameInWindow) || chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
+    guard chromeFrameInWindow.minY <= hostFrameInWindow.minY else {
+        return 0
+    }
+    guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
         return 0
     }
 
