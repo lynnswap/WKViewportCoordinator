@@ -213,14 +213,55 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
+        let hostView = try #require(webView.superview)
+        let bottomObscuredHeight = bottomEdgeObscuredHeight(
+            of: [navigationController.toolbar],
+            in: hostView,
+            extendingFrom: metrics.safeArea.viewport.bottom
+        )
 
         #expect(
-            metrics.bottomObscuredHeight
-                == max(
-                    metrics.safeArea.viewport.bottom,
-                    bottomEdgeObscuredHeight(of: navigationController.toolbar, in: try #require(webView.superview))
-                )
+            metrics.bottomObscuredHeight == bottomObscuredHeight
         )
+    }
+
+    @Test
+    func viewportMetricsProviderIncludesStackedBottomChromeOverlap() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        hostViewController.view.addSubview(webView)
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setToolbarHidden(false, animated: false)
+        let tabBarController = UITabBarController()
+        tabBarController.setViewControllers([navigationController], animated: false)
+        let window = makeWindow(rootViewController: tabBarController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.frame = tabBarController.view.bounds
+        hostViewController.view.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+        tabBarController.view.layoutIfNeeded()
+
+        let metrics = ViewportMetricsProvider().makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: 0,
+            inputAccessoryOverlapHeight: 0
+        )
+        let hostView = try #require(webView.superview)
+        let stackedBottomObscuredHeight = bottomEdgeObscuredHeight(
+            of: [tabBarController.tabBar, navigationController.toolbar],
+            in: hostView,
+            extendingFrom: metrics.safeArea.viewport.bottom
+        )
+
+        #expect(metrics.bottomObscuredHeight == stackedBottomObscuredHeight)
+        #expect(metrics.bottomObscuredHeight > bottomEdgeObscuredHeight(of: tabBarController.tabBar, in: hostView))
+        #expect(metrics.bottomObscuredHeight > bottomEdgeObscuredHeight(of: navigationController.toolbar, in: hostView))
     }
 
     @Test
@@ -1429,26 +1470,59 @@ private func topEdgeObscuredHeight(
 
 @MainActor
 private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView) -> CGFloat {
-    guard let chromeView else {
-        return 0
-    }
-    guard let window = hostView.window, chromeView.window != nil else {
-        return 0
-    }
-    guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
-        return 0
+    bottomEdgeObscuredHeight(of: [chromeView], in: hostView)
+}
+
+@MainActor
+private func bottomEdgeObscuredHeight(
+    of chromeViews: [UIView?],
+    in hostView: UIView,
+    extendingFrom trailingObscuredHeight: CGFloat = 0
+) -> CGFloat {
+    guard let window = hostView.window else {
+        return max(0, trailingObscuredHeight)
     }
 
     let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
-    let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-    guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
-        return 0
-    }
-    guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
-        return 0
+    let chromeFramesInWindow = chromeViews.compactMap { chromeView -> CGRect? in
+        guard let chromeView, chromeView.window != nil else {
+            return nil
+        }
+        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+            return nil
+        }
+        return chromeView.convert(chromeView.bounds, to: window)
     }
 
-    return max(0, hostFrameInWindow.maxY - max(hostFrameInWindow.minY, chromeFrameInWindow.minY))
+    var obscuredMinY = hostFrameInWindow.maxY - max(0, trailingObscuredHeight)
+    var didExtend = true
+
+    while didExtend {
+        didExtend = false
+
+        for chromeFrameInWindow in chromeFramesInWindow {
+            guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+                continue
+            }
+            guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
+                continue
+            }
+
+            let overlapMinY = max(hostFrameInWindow.minY, chromeFrameInWindow.minY)
+            let overlapMaxY = min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY)
+            guard overlapMaxY >= obscuredMinY else {
+                continue
+            }
+            guard overlapMinY < obscuredMinY else {
+                continue
+            }
+
+            obscuredMinY = overlapMinY
+            didExtend = true
+        }
+    }
+
+    return max(0, hostFrameInWindow.maxY - obscuredMinY)
 }
 
 @MainActor

@@ -197,10 +197,13 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
                 extendingFrom: viewportSafeAreaInsets.top
             )
         )
-        let bottomObscuredHeight = max(
-            viewportSafeAreaInsets.bottom,
-            bottomEdgeObscuredHeight(of: hostViewController.tabBarController?.tabBar, in: hostView),
-            bottomEdgeObscuredHeight(of: resolvedVisibleToolbar(for: hostViewController), in: hostView)
+        let bottomObscuredHeight = bottomEdgeObscuredHeight(
+            of: [
+                hostViewController.tabBarController?.tabBar,
+                resolvedVisibleToolbar(for: hostViewController),
+            ],
+            in: hostView,
+            extendingFrom: viewportSafeAreaInsets.bottom
         )
         return ViewportMetrics(
             safeArea: ViewportSafeAreaMetrics(
@@ -273,26 +276,61 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
     }
 
     private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
-        guard let chromeView, let hostView else {
-            return 0
+        bottomEdgeObscuredHeight(of: [chromeView], in: hostView)
+    }
+
+    private func bottomEdgeObscuredHeight(
+        of chromeViews: [UIView?],
+        in hostView: UIView?,
+        extendingFrom trailingObscuredHeight: CGFloat = 0
+    ) -> CGFloat {
+        guard let hostView else {
+            return max(0, trailingObscuredHeight)
         }
-        guard let window = hostView.window, chromeView.window != nil else {
-            return 0
-        }
-        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
-            return 0
+        guard let window = hostView.window else {
+            return max(0, trailingObscuredHeight)
         }
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
-        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
-            return 0
-        }
-        guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
-            return 0
+        let chromeFramesInWindow = chromeViews.compactMap { chromeView -> CGRect? in
+            guard let chromeView, chromeView.window != nil else {
+                return nil
+            }
+            guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+                return nil
+            }
+            return chromeView.convert(chromeView.bounds, to: window)
         }
 
-        return max(0, hostFrameInWindow.maxY - max(hostFrameInWindow.minY, chromeFrameInWindow.minY))
+        var obscuredMinY = hostFrameInWindow.maxY - max(0, trailingObscuredHeight)
+        var didExtend = true
+
+        while didExtend {
+            didExtend = false
+
+            for chromeFrameInWindow in chromeFramesInWindow {
+                guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+                    continue
+                }
+                guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
+                    continue
+                }
+
+                let overlapMinY = max(hostFrameInWindow.minY, chromeFrameInWindow.minY)
+                let overlapMaxY = min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY)
+                guard overlapMaxY >= obscuredMinY else {
+                    continue
+                }
+                guard overlapMinY < obscuredMinY else {
+                    continue
+                }
+
+                obscuredMinY = overlapMinY
+                didExtend = true
+            }
+        }
+
+        return max(0, hostFrameInWindow.maxY - obscuredMinY)
     }
 
     private func effectiveAlpha(of view: UIView) -> CGFloat {
