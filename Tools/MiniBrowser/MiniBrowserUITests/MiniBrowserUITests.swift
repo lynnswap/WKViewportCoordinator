@@ -150,6 +150,55 @@ final class MiniBrowserUITests: XCTestCase {
             "legacy path should not add roughly two keyboard heights: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)"
         )
     }
+
+    @MainActor
+    func testKeyboardFocusKeepsFixedBottomMarkerWithinVisualViewport() throws {
+        let commandSessionID = UUID().uuidString
+        let app = launchApp(commandSessionID: commandSessionID)
+        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
+
+        let initialPage = try pageMetrics(in: app)
+        postCommand(.focusBottomInput, sessionID: commandSessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        let focusedPage = try pageMetrics(in: app, matching: { page in
+            page.activeElement == "bottom-input" && page.revision > initialPage.revision
+        })
+
+        XCTAssertLessThanOrEqual(
+            focusedPage.fixedBottomBottom,
+            focusedPage.viewportHeight,
+            "fixed bottom marker should stay within the visual viewport after keyboard presentation: bottom=\(focusedPage.fixedBottomBottom), viewport=\(focusedPage.viewportHeight)"
+        )
+        XCTAssertTrue(focusedPage.fixedBottomWithinViewport)
+    }
+
+    @MainActor
+    func testFixedBottomMarkerStaysWithinVisualViewportAcrossLegacyAndModernPaths() throws {
+        let commandSessionID = UUID().uuidString
+        let app = launchApp(commandSessionID: commandSessionID)
+        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
+
+        let initialPage = try pageMetrics(in: app)
+        XCTAssertLessThanOrEqual(
+            initialPage.fixedBottomBottom,
+            initialPage.viewportHeight,
+            "fixed bottom marker should stay within the visual viewport: bottom=\(initialPage.fixedBottomBottom), viewport=\(initialPage.viewportHeight)"
+        )
+        XCTAssertTrue(initialPage.fixedBottomWithinViewport)
+
+        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
+        let navigationBarVisiblePage = try pageMetrics(in: app, matching: { page in
+            page.status == "ready" && page.revision > initialPage.revision
+        })
+
+        XCTAssertLessThanOrEqual(
+            navigationBarVisiblePage.fixedBottomBottom,
+            navigationBarVisiblePage.viewportHeight,
+            "fixed bottom marker should remain visible after chrome updates: bottom=\(navigationBarVisiblePage.fixedBottomBottom), viewport=\(navigationBarVisiblePage.viewportHeight)"
+        )
+        XCTAssertTrue(navigationBarVisiblePage.fixedBottomWithinViewport)
+    }
 }
 
 @MainActor
@@ -228,7 +277,9 @@ private extension MiniBrowserUITests {
         let activeElement: String
         let topMarkerTop: Int
         let bottomInputBottom: Int
+        let fixedBottomBottom: Int
         let viewportHeight: Int
+        let fixedBottomWithinViewport: Bool
     }
 
     func launchApp(commandSessionID: String) -> XCUIApplication {

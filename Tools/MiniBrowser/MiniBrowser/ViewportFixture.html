@@ -36,6 +36,25 @@
             background: linear-gradient(180deg, rgba(59, 130, 246, 0.10), rgba(14, 165, 233, 0.22));
         }
 
+        .fixed-bottom-marker {
+            position: fixed;
+            left: 16px;
+            right: 16px;
+            bottom: 0;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 18px 18px 0 0;
+            background: rgba(15, 23, 42, 0.84);
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            pointer-events: none;
+            z-index: 999;
+        }
+
         input {
             width: 100%;
             box-sizing: border-box;
@@ -61,6 +80,7 @@
             <input id="bottom-input" type="text" value="Bottom Input">
         </section>
     </main>
+    <div class="fixed-bottom-marker" id="fixed-bottom-marker">Fixed Bottom Marker</div>
     <script>
         const pendingStates = new Map();
 
@@ -72,8 +92,11 @@
             topMarkerBottom: -1,
             bottomInputTop: -1,
             bottomInputBottom: -1,
+            fixedBottomTop: -1,
+            fixedBottomBottom: -1,
             viewportHeight: -1,
             bottomWithinViewport: false,
+            fixedBottomWithinViewport: false,
             errorMessage: String(message)
         });
 
@@ -92,8 +115,10 @@
             const activeElement = document.activeElement?.id || "none";
             const topMarker = document.getElementById("top-marker");
             const bottomInput = document.getElementById("bottom-input");
+            const fixedBottomMarker = document.getElementById("fixed-bottom-marker");
             const topRect = topMarker.getBoundingClientRect();
             const bottomRect = bottomInput.getBoundingClientRect();
+            const fixedBottomRect = fixedBottomMarker.getBoundingClientRect();
             const viewportHeight = Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight);
             return JSON.stringify({
                 status: "ready",
@@ -103,8 +128,11 @@
                 topMarkerBottom: Math.round(topRect.bottom),
                 bottomInputTop: Math.round(bottomRect.top),
                 bottomInputBottom: Math.round(bottomRect.bottom),
+                fixedBottomTop: Math.round(fixedBottomRect.top),
+                fixedBottomBottom: Math.round(fixedBottomRect.bottom),
                 viewportHeight,
                 bottomWithinViewport: Math.round(bottomRect.bottom) <= viewportHeight,
+                fixedBottomWithinViewport: Math.round(fixedBottomRect.bottom) <= viewportHeight,
                 errorMessage: null
             });
         };
