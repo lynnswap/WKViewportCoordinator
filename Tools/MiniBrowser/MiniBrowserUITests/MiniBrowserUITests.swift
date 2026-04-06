@@ -125,6 +125,31 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
         XCTAssertGreaterThanOrEqual(focusedNative.effectiveBottom, reattached.effectiveBottom)
     }
+
+    @MainActor
+    func testLegacyKeyboardFocusDoesNotDoubleCountBottomInset() throws {
+        if #available(iOS 26.0, *) {
+            throw XCTSkip("Legacy fallback path only")
+        }
+
+        let commandSessionID = UUID().uuidString
+        let app = launchApp(commandSessionID: commandSessionID)
+        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
+
+        let initialNative = try nativeMetrics(in: app)
+        postCommand(.focusBottomInput, sessionID: commandSessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > initialNative.revision })
+        let keyboardHeight = Int(app.keyboards.firstMatch.frame.height.rounded())
+        let bottomInsetDelta = focusedNative.adjustedBottom - initialNative.adjustedBottom
+
+        XCTAssertGreaterThan(keyboardHeight, 0)
+        XCTAssertLessThan(
+            bottomInsetDelta,
+            Int((Double(keyboardHeight) * 1.6).rounded()),
+            "legacy path should not add roughly two keyboard heights: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)"
+        )
+    }
 }
 
 @MainActor
@@ -191,6 +216,8 @@ private extension MiniBrowserUITests {
         let effectiveBottom: Int
         let adjustedTop: Int
         let adjustedBottom: Int
+        let contentInsetTop: Int
+        let contentInsetBottom: Int
         let expectedTop: Int
         let expectedBottom: Int
     }

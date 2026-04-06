@@ -11,7 +11,10 @@ struct ViewportCoordinatorTests {
     func resolvedMetricsRoundInsetsToPixelBoundaries() {
         let first = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 58.97, left: 0, bottom: 34.02, right: 0),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 58.97, left: 0, bottom: 34.02, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 58.97, left: 0, bottom: 34.02, right: 0)
+                ),
                 topObscuredHeight: 102.98,
                 bottomObscuredHeight: 87.96,
                 keyboardOverlapHeight: 0,
@@ -24,7 +27,10 @@ struct ViewportCoordinatorTests {
 
         let second = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59.01, left: 0, bottom: 34.04, right: 0),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59.01, left: 0, bottom: 34.04, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59.01, left: 0, bottom: 34.04, right: 0)
+                ),
                 topObscuredHeight: 103.01,
                 bottomObscuredHeight: 87.99,
                 keyboardOverlapHeight: 0,
@@ -61,10 +67,12 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
+        let hostView = try #require(webView.superview)
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
-        #expect(metrics.topObscuredHeight == metrics.safeAreaInsets.top)
-        #expect(metrics.bottomObscuredHeight == metrics.safeAreaInsets.bottom)
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: hostView))
+        #expect(metrics.safeArea.legacyFallbackBaseline == hostView.safeAreaInsets)
+        #expect(metrics.topObscuredHeight == metrics.safeArea.viewport.top)
+        #expect(metrics.bottomObscuredHeight == metrics.safeArea.viewport.bottom)
     }
 
     @Test
@@ -92,15 +100,15 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
         #expect(
             metrics.topObscuredHeight
                 == max(
-                    metrics.safeAreaInsets.top,
+                    metrics.safeArea.viewport.top,
                     topEdgeObscuredHeight(
                         of: navigationController.navigationBar,
                         in: try #require(webView.superview),
-                        extendingFrom: metrics.safeAreaInsets.top
+                        extendingFrom: metrics.safeArea.viewport.top
                     )
                 )
         )
@@ -125,7 +133,7 @@ struct ViewportCoordinatorTests {
         navigationController.view.layoutIfNeeded()
 
         var navigationBarFrame = navigationController.navigationBar.frame
-        navigationBarFrame.origin.y += 20
+        navigationBarFrame.origin.y = navigationController.view.bounds.midY
         navigationController.navigationBar.frame = navigationBarFrame
 
         let metrics = ViewportMetricsProvider().makeViewportMetrics(
@@ -134,16 +142,16 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
-
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
-        #expect(
-            topEdgeObscuredHeight(
-                of: navigationController.navigationBar,
-                in: try #require(webView.superview),
-                extendingFrom: metrics.safeAreaInsets.top
-            ) == metrics.safeAreaInsets.top
+        let hostView = try #require(webView.superview)
+        let topEdgeHeight = topEdgeObscuredHeight(
+            of: navigationController.navigationBar,
+            in: hostView,
+            extendingFrom: metrics.safeArea.viewport.top
         )
-        #expect(metrics.topObscuredHeight == metrics.safeAreaInsets.top)
+
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: hostView))
+        #expect(topEdgeHeight == 0)
+        #expect(metrics.topObscuredHeight == metrics.safeArea.viewport.top)
     }
 
     @Test
@@ -171,11 +179,11 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
         #expect(
             metrics.bottomObscuredHeight
                 == max(
-                    metrics.safeAreaInsets.bottom,
+                    metrics.safeArea.viewport.bottom,
                     bottomEdgeObscuredHeight(of: tabBarController.tabBar, in: try #require(webView.superview))
                 )
         )
@@ -209,7 +217,7 @@ struct ViewportCoordinatorTests {
         #expect(
             metrics.bottomObscuredHeight
                 == max(
-                    metrics.safeAreaInsets.bottom,
+                    metrics.safeArea.viewport.bottom,
                     bottomEdgeObscuredHeight(of: navigationController.toolbar, in: try #require(webView.superview))
                 )
         )
@@ -241,8 +249,8 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
-        #expect(metrics.bottomObscuredHeight == metrics.safeAreaInsets.bottom)
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
+        #expect(metrics.bottomObscuredHeight == metrics.safeArea.viewport.bottom)
     }
 
     @Test
@@ -274,11 +282,11 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.bottomObscuredHeight == metrics.safeAreaInsets.bottom)
+        #expect(metrics.bottomObscuredHeight == metrics.safeArea.viewport.bottom)
     }
 
     @Test
-    func viewportMetricsProviderIgnoresAdditionalSafeAreaInsets() {
+    func viewportMetricsProviderSeparatesViewportAndLegacyFallbackSafeAreas() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         hostViewController.view.addSubview(webView)
@@ -311,7 +319,11 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(updated == baseline)
+        #expect(updated.safeArea.viewport == baseline.safeArea.viewport)
+        #expect(updated.safeArea.legacyFallbackBaseline == hostViewController.view.safeAreaInsets)
+        #expect(updated.safeArea.legacyFallbackBaseline != baseline.safeArea.legacyFallbackBaseline)
+        #expect(updated.topObscuredHeight == baseline.topObscuredHeight)
+        #expect(updated.bottomObscuredHeight == baseline.bottomObscuredHeight)
     }
 
     @Test
@@ -347,8 +359,10 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
+        let hostView = try #require(webView.superview)
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: hostView))
+        #expect(metrics.safeArea.legacyFallbackBaseline == hostView.safeAreaInsets)
         #expect(metrics.topObscuredHeight == 0)
         #expect(metrics.bottomObscuredHeight == 0)
     }
@@ -364,7 +378,7 @@ struct ViewportCoordinatorTests {
             viewportContainer.topAnchor.constraint(equalTo: hostViewController.view.safeAreaLayoutGuide.topAnchor),
             viewportContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
             viewportContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
-            viewportContainer.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+            viewportContainer.bottomAnchor.constraint(equalTo: hostViewController.view.safeAreaLayoutGuide.bottomAnchor),
         ])
         attach(webView, to: viewportContainer)
 
@@ -386,15 +400,16 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.safeAreaInsets == projectedWindowSafeAreaInsets(in: viewportContainer))
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: viewportContainer))
+        #expect(metrics.safeArea.legacyFallbackBaseline == viewportContainer.safeAreaInsets)
         #expect(
             metrics.topObscuredHeight
                 == max(
-                    metrics.safeAreaInsets.top,
+                    metrics.safeArea.viewport.top,
                     topEdgeObscuredHeight(
                         of: navigationController.navigationBar,
                         in: viewportContainer,
-                        extendingFrom: metrics.safeAreaInsets.top
+                        extendingFrom: metrics.safeArea.viewport.top
                     )
                 )
         )
@@ -491,6 +506,62 @@ struct ViewportCoordinatorTests {
         coordinator.invalidate()
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
+    }
+
+    @Test
+    func registeredContentScrollViewUsesRootHostSafeAreaWhenAttachedDirectly() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setNavigationBarHidden(false, animated: false)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+        hostViewController.setContentScrollView(webView.scrollView)
+        webView.scrollView.layoutIfNeeded()
+
+        #expect(webView.scrollView.adjustedContentInset.top == hostViewController.view.safeAreaInsets.top)
+    }
+
+    @Test
+    func registeredContentScrollViewUsesContainerSafeAreaWhenEmbedded() {
+        let hostViewController = UIViewController()
+        let viewportContainer = UIView()
+        viewportContainer.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(viewportContainer)
+        NSLayoutConstraint.activate([
+            viewportContainer.topAnchor.constraint(equalTo: hostViewController.view.safeAreaLayoutGuide.topAnchor),
+            viewportContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            viewportContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            viewportContainer.bottomAnchor.constraint(equalTo: hostViewController.view.safeAreaLayoutGuide.bottomAnchor),
+        ])
+
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: viewportContainer)
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setNavigationBarHidden(false, animated: false)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+        viewportContainer.layoutIfNeeded()
+        hostViewController.setContentScrollView(webView.scrollView)
+        webView.scrollView.layoutIfNeeded()
+
+        #expect(viewportContainer.safeAreaInsets == .zero)
+        #expect(webView.scrollView.adjustedContentInset == .zero)
     }
 
     @Test
@@ -829,10 +900,13 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
-    func resolvedMetricsDeriveContentScrollInsetFallbackFromSafeAreaDelta() {
+    func resolvedMetricsDeriveContentScrollInsetFallbackFromLegacySafeAreaDelta() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 12, left: 4, bottom: 8, right: 6),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6)
+                ),
                 topObscuredHeight: 103,
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
@@ -852,7 +926,10 @@ struct ViewportCoordinatorTests {
     func resolvedMetricsKeepSafeAreaInsetWhenAdjustmentBehaviorIsNever() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 12, left: 4, bottom: 8, right: 6),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6)
+                ),
                 topObscuredHeight: 103,
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
@@ -869,10 +946,177 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func resolvedMetricsExcludeKeyboardFromLegacyFallbackInset() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 59,
+                bottomObscuredHeight: 34,
+                keyboardOverlapHeight: 331,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(resolvedMetrics.obscuredInsets.bottom == 331)
+        #expect(resolvedMetrics.legacyFallbackObscuredInsets.bottom == 34)
+        #expect(resolvedMetrics.contentScrollInsetFallback.bottom == 0)
+    }
+
+    @Test
+    func appliedViewportStateTracksFallbackInsetChanges() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        let first = AppliedViewportState(
+            resolvedMetrics: resolvedMetrics,
+            contentScrollInsetFallback: .zero
+        )
+        let second = AppliedViewportState(
+            resolvedMetrics: resolvedMetrics,
+            contentScrollInsetFallback: UIEdgeInsets(top: 1, left: 0, bottom: 0, right: 0)
+        )
+
+        #expect(first != second)
+    }
+
+    @Test
+    func appliedViewportStateTracksLegacyViewportChangesWhenFallbackInsetMatches() {
+        let firstResolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+        let secondResolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 47, left: 0, bottom: 22, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 47, left: 0, bottom: 22, right: 0)
+                ),
+                topObscuredHeight: 91,
+                bottomObscuredHeight: 76,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(firstResolvedMetrics.contentScrollInsetFallback == secondResolvedMetrics.contentScrollInsetFallback)
+
+        let first = AppliedViewportState(
+            resolvedMetrics: firstResolvedMetrics,
+            contentScrollInsetFallback: firstResolvedMetrics.contentScrollInsetFallback
+        )
+        let second = AppliedViewportState(
+            resolvedMetrics: secondResolvedMetrics,
+            contentScrollInsetFallback: secondResolvedMetrics.contentScrollInsetFallback
+        )
+
+        #expect(first != second)
+    }
+
+    @Test
+    func appliedViewportStateIgnoresLegacyFallbackWhenNoFallbackIsApplied() {
+        let firstResolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+        let secondResolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 83, left: 0, bottom: 52, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        let first = AppliedViewportState(
+            resolvedMetrics: firstResolvedMetrics,
+            contentScrollInsetFallback: nil
+        )
+        let second = AppliedViewportState(
+            resolvedMetrics: secondResolvedMetrics,
+            contentScrollInsetFallback: nil
+        )
+
+        #expect(first == second)
+    }
+
+    @Test
+    func customMetricsProviderControlsLegacyFallbackSafeArea() {
+        let metrics = StaticViewportMetricsSource().makeViewportMetrics(
+            in: UIViewController(),
+            webView: WKWebView(frame: .zero),
+            keyboardOverlapHeight: 0,
+            inputAccessoryOverlapHeight: 0
+        )
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: metrics,
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(metrics.safeArea.viewport == UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0))
+        #expect(metrics.safeArea.legacyFallbackBaseline == UIEdgeInsets(top: 83, left: 0, bottom: 52, right: 0))
+        #expect(resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 20, left: 0, bottom: 36, right: 0))
+    }
+
+    @Test
     func resolvedMetricsSubtractSafeAreaOnlyForAffectedEdgesInFallback() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
                 topObscuredHeight: 103,
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
@@ -950,7 +1194,10 @@ struct ViewportCoordinatorTests {
         let plainObject = NSObject()
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
                 topObscuredHeight: 103,
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
@@ -979,7 +1226,10 @@ struct ViewportCoordinatorTests {
         let object = TestViewportSPIObject()
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
                 topObscuredHeight: 103,
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
@@ -1066,6 +1316,27 @@ private final class InputAccessoryReportingWebView: WKWebView {
     @objc(_inputViewBoundsInWindow)
     func inputViewBoundsInWindow() -> CGRect {
         reportedInputViewBoundsInWindow
+    }
+}
+
+private struct StaticViewportMetricsSource: ViewportMetricsSource {
+    func makeViewportMetrics(
+        in hostViewController: UIViewController,
+        webView: WKWebView,
+        keyboardOverlapHeight: CGFloat,
+        inputAccessoryOverlapHeight: CGFloat
+    ) -> ViewportMetrics {
+        ViewportMetrics(
+            safeArea: .init(
+                viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                legacyFallbackBaseline: UIEdgeInsets(top: 83, left: 0, bottom: 52, right: 0)
+            ),
+            topObscuredHeight: 103,
+            bottomObscuredHeight: 88,
+            keyboardOverlapHeight: keyboardOverlapHeight,
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
+            bottomChromeMode: .normal
+        )
     }
 }
 
