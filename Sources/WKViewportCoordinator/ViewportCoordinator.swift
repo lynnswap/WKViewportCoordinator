@@ -412,11 +412,12 @@ public final class ViewportCoordinator: NSObject {
         applyScrollViewConfiguration(to: webView.scrollView)
         hostViewController.setContentScrollView(webView.scrollView)
 
+        let metricsHostView = resolvedMetricsHostView(webView: webView, hostViewController: hostViewController)
         var effectiveMetrics = metricsProvider.makeViewportMetrics(
             in: hostViewController,
             webView: webView,
-            keyboardOverlapHeight: keyboardOverlapHeight(),
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight()
+            keyboardOverlapHeight: keyboardOverlapHeight(in: metricsHostView),
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: metricsHostView)
         )
         effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
 
@@ -540,6 +541,10 @@ public final class ViewportCoordinator: NSObject {
         webView?.superview
     }
 
+    private func resolvedMetricsHostView(webView: WKWebView, hostViewController: UIViewController) -> UIView? {
+        webView.superview ?? hostViewController.viewIfLoaded
+    }
+
     private func clearInactiveViewportStateIfNeeded(
         resolvedHostViewController: UIViewController?,
         webView: WKWebView
@@ -644,10 +649,10 @@ public final class ViewportCoordinator: NSObject {
     }
 #endif
 
-    private func keyboardOverlapHeight() -> CGFloat {
+    private func keyboardOverlapHeight(in hostView: UIView?) -> CGFloat {
         let frameIntersectionHeight: CGFloat
         if
-            let hostView = resolvedHostViewController()?.view,
+            let hostView,
             let window = hostView.window,
             keyboardFrameInScreen.isNull == false
         {
@@ -680,9 +685,9 @@ public final class ViewportCoordinator: NSObject {
         return 0
     }
 
-    private func inputAccessoryOverlapHeight() -> CGFloat {
+    private func inputAccessoryOverlapHeight(in hostView: UIView?) -> CGFloat {
         guard
-            let hostView = resolvedHostViewController()?.view,
+            let hostView,
             let window = hostView.window,
             let webView,
             let inputViewBoundsInWindow = ViewportSPIBridge.inputViewBoundsInWindow(of: webView)

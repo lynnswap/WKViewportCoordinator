@@ -470,6 +470,81 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorComputesKeyboardOverlapInContainerCoordinates() throws {
+        let hostViewController = UIViewController()
+        let viewportContainer = UIView()
+        let webView = WKWebView(frame: .zero)
+        viewportContainer.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(viewportContainer)
+        NSLayoutConstraint.activate([
+            viewportContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            viewportContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            viewportContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            viewportContainer.heightAnchor.constraint(equalToConstant: 280)
+        ])
+        attach(webView, to: viewportContainer)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.layoutIfNeeded()
+        let coordinator = ViewportCoordinator(hostViewController: hostViewController, webView: webView)
+        let keyboardFrame = CGRect(
+            x: 0,
+            y: window.bounds.maxY - 200,
+            width: window.bounds.width,
+            height: 200
+        )
+        NotificationCenter.default.post(
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: keyboardFrame)]
+        )
+
+        let resolvedMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(resolvedMetrics.obscuredInsets.bottom == 0)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorComputesInputAccessoryOverlapInContainerCoordinates() throws {
+        let hostViewController = UIViewController()
+        let viewportContainer = UIView()
+        let webView = InputAccessoryReportingWebView(frame: .zero)
+        viewportContainer.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(viewportContainer)
+        NSLayoutConstraint.activate([
+            viewportContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            viewportContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            viewportContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            viewportContainer.heightAnchor.constraint(equalToConstant: 280)
+        ])
+        attach(webView, to: viewportContainer)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.layoutIfNeeded()
+        webView.reportedInputViewBoundsInWindow = CGRect(
+            x: 0,
+            y: window.bounds.maxY - 120,
+            width: window.bounds.width,
+            height: 120
+        )
+
+        let coordinator = ViewportCoordinator(hostViewController: hostViewController, webView: webView)
+        let resolvedMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(resolvedMetrics.obscuredInsets.bottom == 0)
+        coordinator.invalidate()
+    }
+
+    @Test
     func coordinatorReusesObservationViewWhileSuperviewIsStable() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -931,6 +1006,15 @@ private final class CustomViewportTestWebView: WKWebView {
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
+}
+
+private final class InputAccessoryReportingWebView: WKWebView {
+    var reportedInputViewBoundsInWindow: CGRect = .null
+
+    @objc(_inputViewBoundsInWindow)
+    func inputViewBoundsInWindow() -> CGRect {
+        reportedInputViewBoundsInWindow
     }
 }
 
