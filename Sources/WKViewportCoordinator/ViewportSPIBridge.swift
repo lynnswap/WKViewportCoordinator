@@ -33,6 +33,11 @@ enum ViewportSPISelectorNames {
 
 @MainActor
 enum ViewportSPIBridge {
+    private enum LayoutOverrideSelectorKind {
+        case minimumAndMaximum
+        case maximumOnly
+    }
+
     private static let setContentScrollInsetSelector = NSSelectorFromString(
         ViewportSPISelectorNames.setContentScrollInset
     )
@@ -134,7 +139,10 @@ enum ViewportSPIBridge {
         )
         let didApplyLayoutOverride: Bool
         if clearLayoutOverride {
-            didApplyLayoutOverride = clearOverrideLayoutParameters(on: webView)
+            didApplyLayoutOverride = resetLegacyLayoutOverride(
+                on: webView,
+                scrollView: scrollView
+            )
         } else {
             didApplyLayoutOverride = applyLegacyLayoutOverride(
                 obscuredInsets: obscuredInsets,
@@ -203,10 +211,13 @@ enum ViewportSPIBridge {
         to webView: NSObject,
         scrollView: NSObject
     ) -> Bool {
-        guard let boundsValue = webView.value(forKey: "bounds") as? NSValue else {
+        guard let selectorKind = supportedLayoutOverrideSelectorKind(for: webView) else {
             return false
         }
-        let bounds = boundsValue.cgRectValue
+        guard let webView = webView as? UIView else {
+            return false
+        }
+        let bounds = webView.bounds
         let systemContentInset = scrollViewSystemContentInset(of: webView)
             ?? systemContentInset(of: scrollView)
             ?? .zero
@@ -216,24 +227,48 @@ enum ViewportSPIBridge {
             width: max(0, unobscuredRect.width),
             height: max(0, unobscuredRect.height)
         )
+        return applyLayoutOverride(
+            selectorKind,
+            minimumLayoutSize: layoutSize,
+            minimumUnobscuredSizeOverride: layoutSize,
+            maximumUnobscuredSizeOverride: layoutSize,
+            to: webView
+        )
+    }
 
-        if webView.responds(to: Self.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverrideSelector) {
-            let selector = Self.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverrideSelector
-            typealias Setter = @convention(c) (NSObject, Selector, CGSize, CGSize, CGSize) -> Void
-            let implementation = unsafe unsafeBitCast(webView.method(for: selector), to: Setter.self)
-            implementation(webView, selector, layoutSize, layoutSize, layoutSize)
+    @discardableResult
+    private static func resetLegacyLayoutOverride(
+        on webView: NSObject,
+        scrollView: NSObject
+    ) -> Bool {
+        if clearOverrideLayoutParameters(on: webView) {
             return true
         }
 
-        guard webView.responds(to: Self.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverrideSelector) else {
+        guard let selectorKind = supportedLayoutOverrideSelectorKind(for: webView) else {
+            return false
+        }
+        guard let webView = webView as? UIView else {
             return false
         }
 
-        let selector = Self.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverrideSelector
-        typealias Setter = @convention(c) (NSObject, Selector, CGSize, CGSize) -> Void
-        let implementation = unsafe unsafeBitCast(webView.method(for: selector), to: Setter.self)
-        implementation(webView, selector, layoutSize, layoutSize)
-        return true
+        let bounds = webView.bounds
+        let systemContentInset = scrollViewSystemContentInset(of: webView)
+            ?? systemContentInset(of: scrollView)
+            ?? .zero
+        let defaultLayoutRect = bounds.inset(by: systemContentInset)
+        let defaultLayoutSize = CGSize(
+            width: max(0, defaultLayoutRect.width),
+            height: max(0, defaultLayoutRect.height)
+        )
+
+        return applyLayoutOverride(
+            selectorKind,
+            minimumLayoutSize: defaultLayoutSize,
+            minimumUnobscuredSizeOverride: defaultLayoutSize,
+            maximumUnobscuredSizeOverride: defaultLayoutSize,
+            to: webView
+        )
     }
 
     private static func clearOverrideLayoutParameters(on object: NSObject) -> Bool {
@@ -246,6 +281,47 @@ enum ViewportSPIBridge {
         let implementation = unsafe unsafeBitCast(object.method(for: selector), to: Method.self)
         implementation(object, selector)
         return true
+    }
+
+    private static func supportedLayoutOverrideSelectorKind(for object: NSObject) -> LayoutOverrideSelectorKind? {
+        if object.responds(
+            to: Self.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverrideSelector
+        ) {
+            return .minimumAndMaximum
+        }
+        if object.responds(to: Self.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverrideSelector) {
+            return .maximumOnly
+        }
+        return nil
+    }
+
+    private static func applyLayoutOverride(
+        _ selectorKind: LayoutOverrideSelectorKind,
+        minimumLayoutSize: CGSize,
+        minimumUnobscuredSizeOverride: CGSize,
+        maximumUnobscuredSizeOverride: CGSize,
+        to object: NSObject
+    ) -> Bool {
+        switch selectorKind {
+        case .minimumAndMaximum:
+            let selector = Self.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverrideSelector
+            typealias Setter = @convention(c) (NSObject, Selector, CGSize, CGSize, CGSize) -> Void
+            let implementation = unsafe unsafeBitCast(object.method(for: selector), to: Setter.self)
+            implementation(
+                object,
+                selector,
+                minimumLayoutSize,
+                minimumUnobscuredSizeOverride,
+                maximumUnobscuredSizeOverride
+            )
+            return true
+        case .maximumOnly:
+            let selector = Self.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverrideSelector
+            typealias Setter = @convention(c) (NSObject, Selector, CGSize, CGSize) -> Void
+            let implementation = unsafe unsafeBitCast(object.method(for: selector), to: Setter.self)
+            implementation(object, selector, minimumLayoutSize, maximumUnobscuredSizeOverride)
+            return true
+        }
     }
 
     private static func scrollViewSystemContentInset(of object: NSObject) -> UIEdgeInsets? {

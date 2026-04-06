@@ -1367,6 +1367,43 @@ struct ViewportCoordinatorTests {
             ]
         )
     }
+
+    @Test
+    func viewportSPIBridgeResetLegacyViewportFallbackUsesNeutralOverrideWhenClearSelectorIsUnavailable() {
+        let object = TestViewportSPIObjectWithoutClearOverride()
+
+        #expect(
+            ViewportSPIBridge.resetLegacyViewportFallback(
+                on: object,
+                webView: object
+            )
+        )
+        #expect(object.contentScrollInsetCalls == [.zero])
+        #expect(object.obscuredInsetCalls == [.zero])
+        #expect(object.unobscuredSafeAreaInsetsCalls == [.zero])
+        #expect(object.obscuredSafeAreaEdgeCalls == [0])
+        #expect(
+            object.layoutOverrideCalls == [
+                .init(
+                    minimumLayoutSize: CGSize(width: 390, height: 751),
+                    minimumUnobscuredSizeOverride: CGSize(width: 390, height: 751),
+                    maximumUnobscuredSizeOverride: CGSize(width: 390, height: 751)
+                )
+            ]
+        )
+        #expect(object.frameOrBoundsMayHaveChangedCallCount == 1)
+        #expect(
+            object.invocationOrder == [
+                ViewportSPISelectorNames.setContentScrollInset,
+                ViewportSPISelectorNames.setObscuredInsets,
+                ViewportSPISelectorNames.setUnobscuredSafeAreaInsets,
+                ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea,
+                ViewportSPISelectorNames.scrollViewSystemContentInset,
+                ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride,
+                ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
+            ]
+        )
+    }
 }
 
 @MainActor
@@ -1480,6 +1517,80 @@ private final class TestViewportSPIObject: UIView {
     func clearOverrideLayoutParameters() {
         invocationOrder.append(ViewportSPISelectorNames.clearOverrideLayoutParameters)
         clearOverrideLayoutParametersCallCount += 1
+    }
+
+    @objc(_frameOrBoundsMayHaveChanged)
+    func frameOrBoundsMayHaveChanged() {
+        invocationOrder.append(ViewportSPISelectorNames.frameOrBoundsMayHaveChanged)
+        frameOrBoundsMayHaveChangedCallCount += 1
+    }
+}
+
+private final class TestViewportSPIObjectWithoutClearOverride: UIView {
+    private(set) var contentScrollInsetCalls: [UIEdgeInsets] = []
+    private(set) var obscuredInsetCalls: [UIEdgeInsets] = []
+    private(set) var unobscuredSafeAreaInsetsCalls: [UIEdgeInsets] = []
+    private(set) var obscuredSafeAreaEdgeCalls: [UInt] = []
+    private(set) var layoutOverrideCalls: [LegacyLayoutOverrideCall] = []
+    private(set) var frameOrBoundsMayHaveChangedCallCount = 0
+    private(set) var invocationOrder: [String] = []
+    var reportedScrollViewSystemContentInset = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc(_setContentScrollInset:)
+    func setContentScrollInset(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setContentScrollInset)
+        contentScrollInsetCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsets:)
+    func setObscuredInsets(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsets)
+        obscuredInsetCalls.append(insets)
+    }
+
+    @objc(_setUnobscuredSafeAreaInsets:)
+    func setUnobscuredSafeAreaInsets(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setUnobscuredSafeAreaInsets)
+        unobscuredSafeAreaInsetsCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsetEdgesAffectedBySafeArea:)
+    func setObscuredInsetEdgesAffectedBySafeArea(_ edges: UInt) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea)
+        obscuredSafeAreaEdgeCalls.append(edges)
+    }
+
+    @objc(_scrollViewSystemContentInset)
+    func scrollViewSystemContentInset() -> UIEdgeInsets {
+        invocationOrder.append(ViewportSPISelectorNames.scrollViewSystemContentInset)
+        return reportedScrollViewSystemContentInset
+    }
+
+    @objc(_overrideLayoutParametersWithMinimumLayoutSize:minimumUnobscuredSizeOverride:maximumUnobscuredSizeOverride:)
+    func overrideLayoutParameters(
+        minimumLayoutSize: CGSize,
+        minimumUnobscuredSizeOverride: CGSize,
+        maximumUnobscuredSizeOverride: CGSize
+    ) {
+        invocationOrder.append(
+            ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride
+        )
+        layoutOverrideCalls.append(
+            LegacyLayoutOverrideCall(
+                minimumLayoutSize: minimumLayoutSize,
+                minimumUnobscuredSizeOverride: minimumUnobscuredSizeOverride,
+                maximumUnobscuredSizeOverride: maximumUnobscuredSizeOverride
+            )
+        )
     }
 
     @objc(_frameOrBoundsMayHaveChanged)
