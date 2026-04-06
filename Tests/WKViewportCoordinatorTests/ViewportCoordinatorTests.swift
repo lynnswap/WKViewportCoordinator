@@ -860,6 +860,33 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorInvalidateClearsLegacySafeAreaOverrides() {
+        let hostViewController = UIViewController()
+        let webView = LegacySafeAreaReportingWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+
+        #expect(webView.unobscuredSafeAreaInsetsCalls.isEmpty == false)
+        #expect(
+            webView.obscuredInsetEdgesAffectedBySafeAreaCalls.last
+                == UIRectEdge.top.union(.bottom).rawValue
+        )
+
+        coordinator.invalidate()
+
+        #expect(webView.unobscuredSafeAreaInsetsCalls.last == .zero)
+        #expect(webView.obscuredInsetEdgesAffectedBySafeAreaCalls.last == 0)
+        #expect(webView.clearOverrideLayoutParametersCallCount == 1)
+    }
+
+    @Test
     func coordinatorUpdatesCustomSubclassWithExplicitLifecycleForwarding() {
         let hostViewController = UIViewController()
         let navigationController = UINavigationController(rootViewController: hostViewController)
@@ -1005,8 +1032,11 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(resolvedMetrics.obscuredInsets.bottom == 331)
-        #expect(resolvedMetrics.legacyFallbackObscuredInsets.bottom == 34)
         #expect(resolvedMetrics.contentScrollInsetFallback.bottom == 0)
+        #expect(
+            resolvedMetrics.legacyLayoutViewportSize(in: CGRect(x: 0, y: 0, width: 390, height: 844))
+                == CGSize(width: 390, height: 454)
+        )
     }
 
     @Test
@@ -1029,19 +1059,21 @@ struct ViewportCoordinatorTests {
 
         let first = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: .zero
+            contentScrollInsetFallback: .zero,
+            legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
         let second = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: UIEdgeInsets(top: 1, left: 0, bottom: 0, right: 0)
+            contentScrollInsetFallback: UIEdgeInsets(top: 1, left: 0, bottom: 0, right: 0),
+            legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
 
         #expect(first != second)
     }
 
     @Test
-    func appliedViewportStateTracksLegacyViewportChangesWhenFallbackInsetMatches() {
-        let firstResolvedMetrics = ResolvedViewportMetrics(
+    func appliedViewportStateTracksLegacyLayoutViewportSizeChanges() {
+        let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
                 safeArea: .init(
                     viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
@@ -1056,31 +1088,16 @@ struct ViewportCoordinatorTests {
             contentInsetAdjustmentBehavior: .always,
             screenScale: 3
         )
-        let secondResolvedMetrics = ResolvedViewportMetrics(
-            state: ViewportMetrics(
-                safeArea: .init(
-                    viewport: UIEdgeInsets(top: 47, left: 0, bottom: 22, right: 0),
-                    legacyFallbackBaseline: UIEdgeInsets(top: 47, left: 0, bottom: 22, right: 0)
-                ),
-                topObscuredHeight: 91,
-                bottomObscuredHeight: 76,
-                keyboardOverlapHeight: 0,
-                inputAccessoryOverlapHeight: 0,
-                bottomChromeMode: .normal
-            ),
-            contentInsetAdjustmentBehavior: .always,
-            screenScale: 3
-        )
-
-        #expect(firstResolvedMetrics.contentScrollInsetFallback == secondResolvedMetrics.contentScrollInsetFallback)
 
         let first = AppliedViewportState(
-            resolvedMetrics: firstResolvedMetrics,
-            contentScrollInsetFallback: firstResolvedMetrics.contentScrollInsetFallback
+            resolvedMetrics: resolvedMetrics,
+            contentScrollInsetFallback: resolvedMetrics.contentScrollInsetFallback,
+            legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
         let second = AppliedViewportState(
-            resolvedMetrics: secondResolvedMetrics,
-            contentScrollInsetFallback: secondResolvedMetrics.contentScrollInsetFallback
+            resolvedMetrics: resolvedMetrics,
+            contentScrollInsetFallback: resolvedMetrics.contentScrollInsetFallback,
+            legacyLayoutViewportSize: CGSize(width: 390, height: 640)
         )
 
         #expect(first != second)
@@ -1121,11 +1138,13 @@ struct ViewportCoordinatorTests {
 
         let first = AppliedViewportState(
             resolvedMetrics: firstResolvedMetrics,
-            contentScrollInsetFallback: nil
+            contentScrollInsetFallback: nil,
+            legacyLayoutViewportSize: nil
         )
         let second = AppliedViewportState(
             resolvedMetrics: secondResolvedMetrics,
-            contentScrollInsetFallback: nil
+            contentScrollInsetFallback: nil,
+            legacyLayoutViewportSize: nil
         )
 
         #expect(first == second)
@@ -1250,20 +1269,24 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(
-            ViewportSPIBridge.applyContentScrollInsetFallback(
-                resolvedMetrics.contentScrollInsetFallback,
+            ViewportSPIBridge.applyLegacyViewportFallback(
+                resolvedMetrics,
                 to: plainObject,
                 webView: plainObject
             ) == false
         )
-        ViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: plainObject)
-        ViewportSPIBridge.apply(obscuredSafeAreaEdges: [.top, .bottom], to: plainObject)
+        #expect(
+            ViewportSPIBridge.resetLegacyViewportFallback(
+                on: plainObject,
+                webView: plainObject
+            ) == false
+        )
 
         #expect(ViewportSPIBridge.inputViewBoundsInWindow(of: plainObject) == nil)
     }
 
     @Test
-    func viewportSPIBridgeContentScrollInsetFallbackAppliesExpectedSelectorsInOrder() {
+    func viewportSPIBridgeLegacyViewportFallbackAppliesSafeAreaMetadataInOrder() {
         let object = TestViewportSPIObject()
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
@@ -1282,17 +1305,64 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(
-            ViewportSPIBridge.applyContentScrollInsetFallback(
-                resolvedMetrics.contentScrollInsetFallback,
+            ViewportSPIBridge.applyLegacyViewportFallback(
+                resolvedMetrics,
                 to: object,
                 webView: object
             )
         )
         #expect(object.contentScrollInsetCalls == [resolvedMetrics.contentScrollInsetFallback])
+        #expect(object.obscuredInsetCalls == [resolvedMetrics.obscuredInsets])
+        #expect(
+            object.unobscuredSafeAreaInsetsCalls == [resolvedMetrics.unobscuredSafeAreaInsets]
+        )
+        #expect(object.obscuredSafeAreaEdgeCalls == [resolvedMetrics.safeAreaAffectedEdges.rawValue])
+        #expect(
+            object.layoutOverrideCalls == [
+                .init(
+                    minimumLayoutSize: CGSize(width: 390, height: 653),
+                    minimumUnobscuredSizeOverride: CGSize(width: 390, height: 653),
+                    maximumUnobscuredSizeOverride: CGSize(width: 390, height: 653)
+                )
+            ]
+        )
         #expect(object.frameOrBoundsMayHaveChangedCallCount == 1)
         #expect(
             object.invocationOrder == [
                 ViewportSPISelectorNames.setContentScrollInset,
+                ViewportSPISelectorNames.setObscuredInsets,
+                ViewportSPISelectorNames.setUnobscuredSafeAreaInsets,
+                ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea,
+                ViewportSPISelectorNames.scrollViewSystemContentInset,
+                ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride,
+                ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
+            ]
+        )
+    }
+
+    @Test
+    func viewportSPIBridgeResetLegacyViewportFallbackClearsViewportMetadataInOrder() {
+        let object = TestViewportSPIObject()
+
+        #expect(
+            ViewportSPIBridge.resetLegacyViewportFallback(
+                on: object,
+                webView: object
+            )
+        )
+        #expect(object.contentScrollInsetCalls == [.zero])
+        #expect(object.obscuredInsetCalls == [.zero])
+        #expect(object.unobscuredSafeAreaInsetsCalls == [.zero])
+        #expect(object.obscuredSafeAreaEdgeCalls == [0])
+        #expect(object.clearOverrideLayoutParametersCallCount == 1)
+        #expect(object.frameOrBoundsMayHaveChangedCallCount == 1)
+        #expect(
+            object.invocationOrder == [
+                ViewportSPISelectorNames.setContentScrollInset,
+                ViewportSPISelectorNames.setObscuredInsets,
+                ViewportSPISelectorNames.setUnobscuredSafeAreaInsets,
+                ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea,
+                ViewportSPISelectorNames.clearOverrideLayoutParameters,
                 ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
             ]
         )
@@ -1308,15 +1378,108 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
     return window
 }
 
-private final class TestViewportSPIObject: NSObject {
+private struct LegacyLayoutOverrideCall: Equatable {
+    let minimumLayoutSize: CGSize
+    let minimumUnobscuredSizeOverride: CGSize
+    let maximumUnobscuredSizeOverride: CGSize
+}
+
+private final class TestViewportSPIObject: UIView {
     private(set) var contentScrollInsetCalls: [UIEdgeInsets] = []
+    private(set) var obscuredInsetCalls: [UIEdgeInsets] = []
+    private(set) var unobscuredSafeAreaInsetsCalls: [UIEdgeInsets] = []
+    private(set) var obscuredSafeAreaEdgeCalls: [UInt] = []
+    private(set) var layoutOverrideCalls: [LegacyLayoutOverrideCall] = []
+    private(set) var clearOverrideLayoutParametersCallCount = 0
     private(set) var frameOrBoundsMayHaveChangedCallCount = 0
     private(set) var invocationOrder: [String] = []
+    var reportedScrollViewSystemContentInset = UIEdgeInsets(top: 103, left: 0, bottom: 88, right: 0)
+    var reportedSystemContentInset = UIEdgeInsets(top: 103, left: 0, bottom: 88, right: 0)
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     @objc(_setContentScrollInset:)
     func setContentScrollInset(_ insets: UIEdgeInsets) {
         invocationOrder.append(ViewportSPISelectorNames.setContentScrollInset)
         contentScrollInsetCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsets:)
+    func setObscuredInsets(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsets)
+        obscuredInsetCalls.append(insets)
+    }
+
+    @objc(_setUnobscuredSafeAreaInsets:)
+    func setUnobscuredSafeAreaInsets(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setUnobscuredSafeAreaInsets)
+        unobscuredSafeAreaInsetsCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsetEdgesAffectedBySafeArea:)
+    func setObscuredInsetEdgesAffectedBySafeArea(_ edges: UInt) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea)
+        obscuredSafeAreaEdgeCalls.append(edges)
+    }
+
+    @objc(_scrollViewSystemContentInset)
+    func scrollViewSystemContentInset() -> UIEdgeInsets {
+        invocationOrder.append(ViewportSPISelectorNames.scrollViewSystemContentInset)
+        return reportedScrollViewSystemContentInset
+    }
+
+    @objc(_systemContentInset)
+    func systemContentInset() -> UIEdgeInsets {
+        invocationOrder.append(ViewportSPISelectorNames.systemContentInset)
+        return reportedSystemContentInset
+    }
+
+    @objc(_overrideLayoutParametersWithMinimumLayoutSize:minimumUnobscuredSizeOverride:maximumUnobscuredSizeOverride:)
+    func overrideLayoutParameters(
+        minimumLayoutSize: CGSize,
+        minimumUnobscuredSizeOverride: CGSize,
+        maximumUnobscuredSizeOverride: CGSize
+    ) {
+        invocationOrder.append(
+            ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride
+        )
+        layoutOverrideCalls.append(
+            LegacyLayoutOverrideCall(
+                minimumLayoutSize: minimumLayoutSize,
+                minimumUnobscuredSizeOverride: minimumUnobscuredSizeOverride,
+                maximumUnobscuredSizeOverride: maximumUnobscuredSizeOverride
+            )
+        )
+    }
+
+    @objc(_overrideLayoutParametersWithMinimumLayoutSize:maximumUnobscuredSizeOverride:)
+    func overrideLayoutParameters(
+        minimumLayoutSize: CGSize,
+        maximumUnobscuredSizeOverride: CGSize
+    ) {
+        invocationOrder.append(
+            ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride
+        )
+        layoutOverrideCalls.append(
+            LegacyLayoutOverrideCall(
+                minimumLayoutSize: minimumLayoutSize,
+                minimumUnobscuredSizeOverride: minimumLayoutSize,
+                maximumUnobscuredSizeOverride: maximumUnobscuredSizeOverride
+            )
+        )
+    }
+
+    @objc(_clearOverrideLayoutParameters)
+    func clearOverrideLayoutParameters() {
+        invocationOrder.append(ViewportSPISelectorNames.clearOverrideLayoutParameters)
+        clearOverrideLayoutParametersCallCount += 1
     }
 
     @objc(_frameOrBoundsMayHaveChanged)
@@ -1348,6 +1511,33 @@ private final class CustomViewportTestWebView: WKWebView {
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
+}
+
+private final class LegacySafeAreaReportingWebView: WKWebView {
+    private(set) var obscuredInsetCalls: [UIEdgeInsets] = []
+    private(set) var unobscuredSafeAreaInsetsCalls: [UIEdgeInsets] = []
+    private(set) var obscuredInsetEdgesAffectedBySafeAreaCalls: [UInt] = []
+    private(set) var clearOverrideLayoutParametersCallCount = 0
+
+    @objc(_setObscuredInsets:)
+    func setObscuredInsets(_ insets: UIEdgeInsets) {
+        obscuredInsetCalls.append(insets)
+    }
+
+    @objc(_setUnobscuredSafeAreaInsets:)
+    func setUnobscuredSafeAreaInsets(_ insets: UIEdgeInsets) {
+        unobscuredSafeAreaInsetsCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsetEdgesAffectedBySafeArea:)
+    func setObscuredInsetEdgesAffectedBySafeArea(_ edges: UInt) {
+        obscuredInsetEdgesAffectedBySafeAreaCalls.append(edges)
+    }
+
+    @objc(_clearOverrideLayoutParameters)
+    func clearOverrideLayoutParameters() {
+        clearOverrideLayoutParametersCallCount += 1
     }
 }
 

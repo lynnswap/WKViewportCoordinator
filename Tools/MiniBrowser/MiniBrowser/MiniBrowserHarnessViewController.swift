@@ -119,8 +119,11 @@ final class MiniBrowserHarnessState {
         var topMarkerBottom: Int
         var bottomInputTop: Int
         var bottomInputBottom: Int
+        var fixedBottomTop: Int
+        var fixedBottomBottom: Int
         var viewportHeight: Int
         var bottomWithinViewport: Bool
+        var fixedBottomWithinViewport: Bool
         var errorMessage: String?
 
         static let idle = Self(
@@ -131,8 +134,11 @@ final class MiniBrowserHarnessState {
             topMarkerBottom: -1,
             bottomInputTop: -1,
             bottomInputBottom: -1,
+            fixedBottomTop: -1,
+            fixedBottomBottom: -1,
             viewportHeight: -1,
             bottomWithinViewport: false,
+            fixedBottomWithinViewport: false,
             errorMessage: nil
         )
     }
@@ -189,7 +195,21 @@ final class MiniBrowserHarnessState {
 
         pageMetricsGeneration += 1
         fixtureLoaded = false
-        pageMetrics = PageMetrics(status: "loading", revision: pageMetrics.revision + 1, activeElement: "", topMarkerTop: -1, topMarkerBottom: -1, bottomInputTop: -1, bottomInputBottom: -1, viewportHeight: -1, bottomWithinViewport: false, errorMessage: nil)
+        pageMetrics = PageMetrics(
+            status: "loading",
+            revision: pageMetrics.revision + 1,
+            activeElement: "",
+            topMarkerTop: -1,
+            topMarkerBottom: -1,
+            bottomInputTop: -1,
+            bottomInputBottom: -1,
+            fixedBottomTop: -1,
+            fixedBottomBottom: -1,
+            viewportHeight: -1,
+            bottomWithinViewport: false,
+            fixedBottomWithinViewport: false,
+            errorMessage: nil
+        )
         webView.loadFileURL(fixtureURL, allowingReadAccessTo: fixtureURL.deletingLastPathComponent())
     }
 
@@ -363,14 +383,31 @@ final class MiniBrowserHarnessState {
             topMarkerBottom: -1,
             bottomInputTop: -1,
             bottomInputBottom: -1,
+            fixedBottomTop: -1,
+            fixedBottomBottom: -1,
             viewportHeight: -1,
             bottomWithinViewport: false,
+            fixedBottomWithinViewport: false,
             errorMessage: message
         )
     }
 
     private func setPageMetricsLoading() {
-        pageMetrics = PageMetrics(status: "loading", revision: pageMetrics.revision + 1, activeElement: "", topMarkerTop: -1, topMarkerBottom: -1, bottomInputTop: -1, bottomInputBottom: -1, viewportHeight: -1, bottomWithinViewport: false, errorMessage: nil)
+        pageMetrics = PageMetrics(
+            status: "loading",
+            revision: pageMetrics.revision + 1,
+            activeElement: "",
+            topMarkerTop: -1,
+            topMarkerBottom: -1,
+            bottomInputTop: -1,
+            bottomInputBottom: -1,
+            fixedBottomTop: -1,
+            fixedBottomBottom: -1,
+            viewportHeight: -1,
+            bottomWithinViewport: false,
+            fixedBottomWithinViewport: false,
+            errorMessage: nil
+        )
     }
 
     private func handlePageMetricsFailure(_ error: any Error) {

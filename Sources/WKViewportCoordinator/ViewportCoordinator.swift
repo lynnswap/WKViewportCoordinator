@@ -98,10 +98,10 @@ struct ResolvedViewportMetrics: Equatable {
     let viewportSafeAreaInsets: UIEdgeInsets
     let legacyFallbackSafeAreaInsets: UIEdgeInsets
     let obscuredInsets: UIEdgeInsets
-    let legacyFallbackObscuredInsets: UIEdgeInsets
     let unobscuredSafeAreaInsets: UIEdgeInsets
     let safeAreaAffectedEdges: UIRectEdge
     let contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
+    let contentScrollInsetFallback: UIEdgeInsets
 
     init(
         state: ViewportMetrics,
@@ -111,7 +111,7 @@ struct ResolvedViewportMetrics: Equatable {
         viewportSafeAreaInsets = state.safeArea.viewport.wk_roundedToPixel(screenScale)
         legacyFallbackSafeAreaInsets = state.safeArea.legacyFallbackBaseline.wk_roundedToPixel(screenScale)
         obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
-        legacyFallbackObscuredInsets = UIEdgeInsets(
+        let scrollFallbackObscuredInsets = UIEdgeInsets(
             top: max(0, state.topObscuredHeight),
             left: 0,
             bottom: max(0, state.bottomChromeMode == .normal ? state.bottomObscuredHeight : 0),
@@ -125,16 +125,36 @@ struct ResolvedViewportMetrics: Equatable {
         )
         safeAreaAffectedEdges = state.safeAreaAffectedEdges
         self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
+        let safeAreaInsetContribution: UIEdgeInsets
+        if contentInsetAdjustmentBehavior == .never {
+            safeAreaInsetContribution = .zero
+        } else {
+            safeAreaInsetContribution = UIEdgeInsets(
+                top: safeAreaAffectedEdges.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
+                left: safeAreaAffectedEdges.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
+                bottom: safeAreaAffectedEdges.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
+                right: safeAreaAffectedEdges.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
+            )
+        }
+        self.contentScrollInsetFallback = UIEdgeInsets(
+            top: max(0, scrollFallbackObscuredInsets.top - safeAreaInsetContribution.top),
+            left: max(0, scrollFallbackObscuredInsets.left - safeAreaInsetContribution.left),
+            bottom: max(0, scrollFallbackObscuredInsets.bottom - safeAreaInsetContribution.bottom),
+            right: max(0, scrollFallbackObscuredInsets.right - safeAreaInsetContribution.right)
+        )
     }
 
-    var contentScrollInsetFallback: UIEdgeInsets {
-        let safeAreaInsetContribution = safeAreaInsetContributionForFallback
-        return UIEdgeInsets(
-            top: max(0, legacyFallbackObscuredInsets.top - safeAreaInsetContribution.top),
-            left: max(0, legacyFallbackObscuredInsets.left - safeAreaInsetContribution.left),
-            bottom: max(0, legacyFallbackObscuredInsets.bottom - safeAreaInsetContribution.bottom),
-            right: max(0, legacyFallbackObscuredInsets.right - safeAreaInsetContribution.right)
+    func legacyLayoutViewportSize(in bounds: CGRect) -> CGSize {
+        let layoutInsets = legacyScrollSystemContentInset.wk_maxPerEdge(with: obscuredInsets)
+        let unobscuredRect = bounds.inset(by: layoutInsets)
+        return CGSize(
+            width: max(0, unobscuredRect.width),
+            height: max(0, unobscuredRect.height)
         )
+    }
+
+    private var legacyScrollSystemContentInset: UIEdgeInsets {
+        contentScrollInsetFallback.wk_adding(safeAreaInsetContributionForFallback)
     }
 
     private var safeAreaInsetContributionForFallback: UIEdgeInsets {
@@ -154,9 +174,14 @@ struct ResolvedViewportMetrics: Equatable {
 struct AppliedViewportState: Equatable {
     let resolvedMetrics: ResolvedViewportMetrics
     let contentScrollInsetFallback: UIEdgeInsets?
+    let legacyLayoutViewportSize: CGSize?
 
     static func == (lhs: AppliedViewportState, rhs: AppliedViewportState) -> Bool {
         guard lhs.contentScrollInsetFallback == rhs.contentScrollInsetFallback else {
+            return false
+        }
+
+        guard lhs.legacyLayoutViewportSize == rhs.legacyLayoutViewportSize else {
             return false
         }
 
@@ -519,14 +544,18 @@ public final class ViewportCoordinator: NSObject {
             screenScale: screenScale
         )
         let contentScrollInsetFallback: UIEdgeInsets?
+        let legacyLayoutViewportSize: CGSize?
         if #available(iOS 26.0, *) {
             contentScrollInsetFallback = nil
+            legacyLayoutViewportSize = nil
         } else {
             contentScrollInsetFallback = resolvedMetrics.contentScrollInsetFallback
+            legacyLayoutViewportSize = resolvedMetrics.legacyLayoutViewportSize(in: webView.bounds)
         }
         let appliedViewportState = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: contentScrollInsetFallback
+            contentScrollInsetFallback: contentScrollInsetFallback,
+            legacyLayoutViewportSize: legacyLayoutViewportSize
         )
         guard appliedViewportState != lastAppliedViewportState else {
             return
@@ -547,8 +576,8 @@ public final class ViewportCoordinator: NSObject {
                 to: webView
             )
         } else {
-            ViewportSPIBridge.applyContentScrollInsetFallback(
-                contentScrollInsetFallback ?? resolvedMetrics.contentScrollInsetFallback,
+            ViewportSPIBridge.applyLegacyViewportFallback(
+                resolvedMetrics,
                 to: webView.scrollView,
                 webView: webView
             )
@@ -670,7 +699,10 @@ public final class ViewportCoordinator: NSObject {
             ViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: webView)
             ViewportSPIBridge.apply(obscuredSafeAreaEdges: [], to: webView)
         } else {
-            _ = ViewportSPIBridge.applyContentScrollInsetFallback(.zero, to: webView.scrollView, webView: webView)
+            _ = ViewportSPIBridge.resetLegacyViewportFallback(
+                on: webView.scrollView,
+                webView: webView
+            )
         }
     }
 
@@ -868,6 +900,24 @@ private final class ViewportObservationView: UIView {
 }
 
 private extension UIEdgeInsets {
+    func wk_adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(
+            top: top + other.top,
+            left: left + other.left,
+            bottom: bottom + other.bottom,
+            right: right + other.right
+        )
+    }
+
+    func wk_maxPerEdge(with other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(top, other.top),
+            left: max(left, other.left),
+            bottom: max(bottom, other.bottom),
+            right: max(right, other.right)
+        )
+    }
+
     func wk_roundedToPixel(_ screenScale: CGFloat) -> UIEdgeInsets {
         guard screenScale > 0 else {
             return self
