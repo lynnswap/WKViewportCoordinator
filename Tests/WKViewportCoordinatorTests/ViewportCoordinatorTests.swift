@@ -232,6 +232,9 @@ struct ViewportCoordinatorTests {
         hostViewController.view.addSubview(webView)
 
         let navigationController = UINavigationController(rootViewController: hostViewController)
+        hostViewController.toolbarItems = [
+            UIBarButtonItem(systemItem: .done)
+        ]
         navigationController.setToolbarHidden(false, animated: false)
         let tabBarController = UITabBarController()
         tabBarController.setViewControllers([navigationController], animated: false)
@@ -245,6 +248,35 @@ struct ViewportCoordinatorTests {
         hostViewController.view.layoutIfNeeded()
         navigationController.view.layoutIfNeeded()
         tabBarController.view.layoutIfNeeded()
+        let hostView = try #require(webView.superview)
+        let toolbar = try #require(navigationController.toolbar)
+        window.addSubview(toolbar)
+        toolbar.isHidden = false
+        toolbar.alpha = 1
+        let safeAreaInsets = projectedWindowSafeAreaInsets(in: hostView)
+        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
+        let tabBarHeight: CGFloat = 44
+        let toolbarHeight: CGFloat = 38
+        setFrame(
+            of: tabBarController.tabBar,
+            in: window,
+            to: CGRect(
+                x: hostFrameInWindow.minX,
+                y: hostFrameInWindow.maxY - safeAreaInsets.bottom - tabBarHeight,
+                width: hostFrameInWindow.width,
+                height: tabBarHeight
+            )
+        )
+        setFrame(
+            of: toolbar,
+            in: window,
+            to: CGRect(
+                x: hostFrameInWindow.minX,
+                y: hostFrameInWindow.maxY - safeAreaInsets.bottom - tabBarHeight - toolbarHeight,
+                width: hostFrameInWindow.width,
+                height: toolbarHeight
+            )
+        )
 
         let metrics = ViewportMetricsProvider().makeViewportMetrics(
             in: hostViewController,
@@ -252,16 +284,15 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
-        let hostView = try #require(webView.superview)
         let stackedBottomObscuredHeight = bottomEdgeObscuredHeight(
-            of: [tabBarController.tabBar, navigationController.toolbar],
+            of: [tabBarController.tabBar, toolbar],
             in: hostView,
             extendingFrom: metrics.safeArea.viewport.bottom
         )
+        let expectedBottomObscuredHeight = safeAreaInsets.bottom + tabBarHeight + toolbarHeight
 
         #expect(metrics.bottomObscuredHeight == stackedBottomObscuredHeight)
-        #expect(metrics.bottomObscuredHeight > bottomEdgeObscuredHeight(of: tabBarController.tabBar, in: hostView))
-        #expect(metrics.bottomObscuredHeight > bottomEdgeObscuredHeight(of: navigationController.toolbar, in: hostView))
+        #expect(metrics.bottomObscuredHeight == expectedBottomObscuredHeight)
     }
 
     @Test
@@ -883,7 +914,12 @@ struct ViewportCoordinatorTests {
 
         #expect(webView.unobscuredSafeAreaInsetsCalls.last == .zero)
         #expect(webView.obscuredInsetEdgesAffectedBySafeAreaCalls.last == 0)
-        #expect(webView.clearOverrideLayoutParametersCallCount == 1)
+        if #available(iOS 26.0, *) {
+            #expect(webView.obscuredContentInsets == .zero)
+            #expect(webView.clearOverrideLayoutParametersCallCount == 0)
+        } else {
+            #expect(webView.clearOverrideLayoutParametersCallCount == 1)
+        }
     }
 
     @Test
@@ -1026,6 +1062,32 @@ struct ViewportCoordinatorTests {
                 keyboardOverlapHeight: 331,
                 inputAccessoryOverlapHeight: 0,
                 bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(resolvedMetrics.obscuredInsets.bottom == 331)
+        #expect(resolvedMetrics.contentScrollInsetFallback.bottom == 0)
+        #expect(
+            resolvedMetrics.legacyLayoutViewportSize(in: CGRect(x: 0, y: 0, width: 390, height: 844))
+                == CGSize(width: 390, height: 454)
+        )
+    }
+
+    @Test
+    func resolvedMetricsHideBottomChromeForKeyboardWithoutDroppingDynamicOverlap() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 59,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 240,
+                inputAccessoryOverlapHeight: 331,
+                bottomChromeMode: .hiddenForKeyboard
             ),
             contentInsetAdjustmentBehavior: .always,
             screenScale: 3
@@ -1224,6 +1286,48 @@ struct ViewportCoordinatorTests {
 
     @Test
     @available(iOS 26.0, *)
+    func coordinatorAppliesConfiguredScrollEdgeEffects() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(
+            webView: webView,
+            configuration: ViewportConfiguration(
+                topEdgeEffectHidden: true,
+                bottomEdgeEffectHidden: false,
+                topEdgeEffectStyle: .hard,
+                bottomEdgeEffectStyle: .automatic
+            )
+        )
+
+        #expect(webView.scrollView.topEdgeEffect.isHidden)
+        #expect(webView.scrollView.topEdgeEffect.style == .hard)
+        #expect(webView.scrollView.bottomEdgeEffect.isHidden == false)
+        #expect(webView.scrollView.bottomEdgeEffect.style == .automatic)
+
+        coordinator.configuration = ViewportConfiguration(
+            topEdgeEffectHidden: false,
+            bottomEdgeEffectHidden: true,
+            topEdgeEffectStyle: .soft,
+            bottomEdgeEffectStyle: .hard
+        )
+
+        #expect(webView.scrollView.topEdgeEffect.isHidden == false)
+        #expect(webView.scrollView.topEdgeEffect.style == .soft)
+        #expect(webView.scrollView.bottomEdgeEffect.isHidden)
+        #expect(webView.scrollView.bottomEdgeEffect.style == .hard)
+        coordinator.invalidate()
+    }
+
+    @Test
+    @available(iOS 26.0, *)
     func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -1404,6 +1508,60 @@ struct ViewportCoordinatorTests {
             ]
         )
     }
+
+    @Test
+    func viewportSPIBridgeFallbackUsesInternalSelectorsAndMaximumOnlyLayoutOverride() {
+        let object = TestViewportSPIObjectWithInternalSelectorsAndMaximumOnlyOverride()
+        object.reportedSystemContentInset = UIEdgeInsets(top: 120, left: 0, bottom: 20, right: 0)
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            contentInsetAdjustmentBehavior: .always,
+            screenScale: 3
+        )
+
+        #expect(
+            ViewportSPIBridge.applyLegacyViewportFallback(
+                resolvedMetrics,
+                to: object,
+                webView: object
+            )
+        )
+        #expect(object.contentScrollInsetInternalCalls == [resolvedMetrics.contentScrollInsetFallback])
+        #expect(object.obscuredInsetsInternalCalls == [resolvedMetrics.obscuredInsets])
+        #expect(object.unobscuredSafeAreaInsetsCalls == [resolvedMetrics.unobscuredSafeAreaInsets])
+        #expect(object.obscuredSafeAreaEdgeCalls == [resolvedMetrics.safeAreaAffectedEdges.rawValue])
+        #expect(
+            object.layoutOverrideCalls == [
+                .init(
+                    minimumLayoutSize: CGSize(width: 390, height: 636),
+                    minimumUnobscuredSizeOverride: CGSize(width: 390, height: 636),
+                    maximumUnobscuredSizeOverride: CGSize(width: 390, height: 636)
+                )
+            ]
+        )
+        #expect(object.frameOrBoundsMayHaveChangedCallCount == 1)
+        #expect(
+            object.invocationOrder == [
+                ViewportSPISelectorNames.setContentScrollInsetInternal,
+                ViewportSPISelectorNames.setObscuredInsetsInternal,
+                ViewportSPISelectorNames.setUnobscuredSafeAreaInsets,
+                ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea,
+                ViewportSPISelectorNames.systemContentInset,
+                ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride,
+                ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
+            ]
+        )
+    }
 }
 
 @MainActor
@@ -1413,6 +1571,14 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
     window.makeKeyAndVisible()
     window.layoutIfNeeded()
     return window
+}
+
+@MainActor
+private func setFrame(of view: UIView, in window: UIWindow, to frameInWindow: CGRect) {
+    guard let superview = view.superview else {
+        return
+    }
+    view.frame = superview.convert(frameInWindow, from: window)
 }
 
 private struct LegacyLayoutOverrideCall: Equatable {
@@ -1588,6 +1754,80 @@ private final class TestViewportSPIObjectWithoutClearOverride: UIView {
             LegacyLayoutOverrideCall(
                 minimumLayoutSize: minimumLayoutSize,
                 minimumUnobscuredSizeOverride: minimumUnobscuredSizeOverride,
+                maximumUnobscuredSizeOverride: maximumUnobscuredSizeOverride
+            )
+        )
+    }
+
+    @objc(_frameOrBoundsMayHaveChanged)
+    func frameOrBoundsMayHaveChanged() {
+        invocationOrder.append(ViewportSPISelectorNames.frameOrBoundsMayHaveChanged)
+        frameOrBoundsMayHaveChangedCallCount += 1
+    }
+}
+
+private final class TestViewportSPIObjectWithInternalSelectorsAndMaximumOnlyOverride: UIView {
+    private(set) var contentScrollInsetInternalCalls: [UIEdgeInsets] = []
+    private(set) var obscuredInsetsInternalCalls: [UIEdgeInsets] = []
+    private(set) var unobscuredSafeAreaInsetsCalls: [UIEdgeInsets] = []
+    private(set) var obscuredSafeAreaEdgeCalls: [UInt] = []
+    private(set) var layoutOverrideCalls: [LegacyLayoutOverrideCall] = []
+    private(set) var frameOrBoundsMayHaveChangedCallCount = 0
+    private(set) var invocationOrder: [String] = []
+    var reportedSystemContentInset = UIEdgeInsets(top: 120, left: 0, bottom: 20, right: 0)
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc(_setContentScrollInsetInternal:)
+    func setContentScrollInsetInternal(_ insets: UIEdgeInsets) -> Bool {
+        invocationOrder.append(ViewportSPISelectorNames.setContentScrollInsetInternal)
+        contentScrollInsetInternalCalls.append(insets)
+        return true
+    }
+
+    @objc(_setObscuredInsetsInternal:)
+    func setObscuredInsetsInternal(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsetsInternal)
+        obscuredInsetsInternalCalls.append(insets)
+    }
+
+    @objc(_setUnobscuredSafeAreaInsets:)
+    func setUnobscuredSafeAreaInsets(_ insets: UIEdgeInsets) {
+        invocationOrder.append(ViewportSPISelectorNames.setUnobscuredSafeAreaInsets)
+        unobscuredSafeAreaInsetsCalls.append(insets)
+    }
+
+    @objc(_setObscuredInsetEdgesAffectedBySafeArea:)
+    func setObscuredInsetEdgesAffectedBySafeArea(_ edges: UInt) {
+        invocationOrder.append(ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea)
+        obscuredSafeAreaEdgeCalls.append(edges)
+    }
+
+    @objc(_systemContentInset)
+    func systemContentInset() -> UIEdgeInsets {
+        invocationOrder.append(ViewportSPISelectorNames.systemContentInset)
+        return reportedSystemContentInset
+    }
+
+    @objc(_overrideLayoutParametersWithMinimumLayoutSize:maximumUnobscuredSizeOverride:)
+    func overrideLayoutParameters(
+        minimumLayoutSize: CGSize,
+        maximumUnobscuredSizeOverride: CGSize
+    ) {
+        invocationOrder.append(
+            ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride
+        )
+        layoutOverrideCalls.append(
+            LegacyLayoutOverrideCall(
+                minimumLayoutSize: minimumLayoutSize,
+                minimumUnobscuredSizeOverride: minimumLayoutSize,
                 maximumUnobscuredSizeOverride: maximumUnobscuredSizeOverride
             )
         )
