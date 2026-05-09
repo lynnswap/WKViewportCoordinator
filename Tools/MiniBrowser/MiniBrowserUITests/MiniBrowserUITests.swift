@@ -116,9 +116,14 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
 
         postCommand(.focusBottomInput, sessionID: commandSessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let focusedPage = try pageMetrics(
             in: app,
-            matching: { $0.activeElement == "bottom-input" && $0.revision > excludedPage.revision }
+            matching: {
+                $0.activeElement == "bottom-input"
+                    && $0.revision > excludedPage.revision
+                    && $0.bottomInputBottom <= $0.viewportHeight
+            }
         )
         let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > restoredStandard.revision })
         XCTAssertEqual(focusedPage.activeElement, "bottom-input")
