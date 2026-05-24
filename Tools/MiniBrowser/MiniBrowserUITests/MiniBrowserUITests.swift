@@ -12,8 +12,7 @@ final class MiniBrowserUITests: XCTestCase {
     }
 
     @MainActor
-    @available(iOS 26.0, *)
-    func testViewportCoordinatorMaintainsViewportAcrossScenarioAndLifecycleChanges() throws {
+    func testViewportCoordinatorMaintainsViewportAcrossSequentialInteractions() throws {
         let commandSessionID = UUID().uuidString
         let app = launchApp(commandSessionID: commandSessionID)
         try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
@@ -24,10 +23,13 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertEqual(initialNative.chromeMode, HarnessCommand.ChromeMode.navigationBarHidden.rawValue)
         XCTAssertTrue(initialNative.attached)
         XCTAssertTrue(initialNative.windowAttached)
-        XCTAssertEqual(initialNative.obscuredTop, initialNative.expectedTop)
-        XCTAssertGreaterThan(initialNative.effectiveTop, 0)
-        XCTAssertGreaterThan(initialNative.effectiveBottom, 0)
+        if #available(iOS 26.0, *) {
+            XCTAssertEqual(initialNative.obscuredTop, initialNative.expectedTop)
+            XCTAssertGreaterThan(initialNative.effectiveTop, 0)
+            XCTAssertGreaterThan(initialNative.effectiveBottom, 0)
+        }
         XCTAssertGreaterThanOrEqual(initialPage.topMarkerTop, 0)
+        assertFixedBottomWithinViewport(initialPage, context: "initial")
 
         postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
         let chromeVisibleNative = try nativeMetrics(
@@ -38,9 +40,12 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeVisiblePage = try pageMetrics(in: app, matching: { $0.revision > initialPage.revision })
-        XCTAssertEqual(chromeVisibleNative.obscuredTop, chromeVisibleNative.expectedTop)
-        XCTAssertGreaterThan(chromeVisibleNative.expectedTop, initialNative.expectedTop)
+        if #available(iOS 26.0, *) {
+            XCTAssertEqual(chromeVisibleNative.obscuredTop, chromeVisibleNative.expectedTop)
+            XCTAssertGreaterThan(chromeVisibleNative.expectedTop, initialNative.expectedTop)
+        }
         XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
+        assertFixedBottomWithinViewport(chromeVisiblePage, context: "navigation bar visible")
 
         postCommand(.setChromeMode(.navigationBarHidden), sessionID: commandSessionID)
         let chromeHiddenNative = try nativeMetrics(
@@ -51,158 +56,27 @@ final class MiniBrowserUITests: XCTestCase {
             }
         )
         let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
-        XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
-        XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
+        if #available(iOS 26.0, *) {
+            XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
+            XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
+        }
         XCTAssertGreaterThan(chromeHiddenPage.revision, chromeVisiblePage.revision)
 
-        postCommand(.setAttachment(.detached), sessionID: commandSessionID)
-        let detached = try nextNativeMetrics(after: chromeHiddenNative.revision, in: app)
-        XCTAssertFalse(detached.attached)
-        XCTAssertFalse(detached.windowAttached)
-        XCTAssertEqual(detached.expectedTop, 0)
-        XCTAssertEqual(detached.expectedBottom, 0)
-
-        postCommand(.setAttachment(.attached), sessionID: commandSessionID)
-        let reattached = try nextNativeMetrics(after: detached.revision, in: app)
-        XCTAssertTrue(reattached.attached)
-        XCTAssertTrue(reattached.windowAttached)
-        XCTAssertEqual(reattached.obscuredTop, reattached.expectedTop)
-        XCTAssertGreaterThan(reattached.effectiveTop, 0)
-        XCTAssertGreaterThan(reattached.effectiveBottom, 0)
-
-        postCommand(.setScenario(.neverAdjustment), sessionID: commandSessionID)
-        let neverNative = try nativeMetrics(
-            in: app,
-            matching: { $0.scenario == "neverAdjustment" && $0.revision > reattached.revision }
-        )
-        let neverPage = try pageMetrics(in: app, matching: { $0.revision > chromeHiddenPage.revision })
-        XCTAssertEqual(neverNative.effectiveTop, neverNative.obscuredTop)
-        XCTAssertEqual(neverNative.effectiveBottom, neverNative.obscuredBottom)
-        XCTAssertLessThanOrEqual(neverNative.adjustedTop, neverNative.effectiveTop)
-        XCTAssertLessThanOrEqual(neverNative.adjustedBottom, neverNative.effectiveBottom)
-
-        postCommand(.setScenario(.standard), sessionID: commandSessionID)
-        let standardBeforeExcludedNative = try nativeMetrics(
-            in: app,
-            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
-        )
-
-        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
-        let visibleStandardBeforeExcludedNative = try nativeMetrics(
-            in: app,
-            matching: {
-                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
-                    && $0.scenario == "standard"
-                    && $0.revision > standardBeforeExcludedNative.revision
-            }
-        )
-        let visibleStandardBeforeExcludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
-
-        postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
-        let excludedNative = try nativeMetrics(
-            in: app,
-            matching: { $0.scenario == "excludeTopSafeArea" && $0.revision > visibleStandardBeforeExcludedNative.revision }
-        )
-        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > visibleStandardBeforeExcludedPage.revision })
-        XCTAssertEqual(excludedNative.scenario, "excludeTopSafeArea")
-        XCTAssertGreaterThan(excludedPage.revision, visibleStandardBeforeExcludedPage.revision)
-
-        postCommand(.setScenario(.standard), sessionID: commandSessionID)
-        let restoredStandard = try nativeMetrics(
-            in: app,
-            matching: { $0.scenario == "standard" && $0.revision > excludedNative.revision }
-        )
-        XCTAssertTrue(restoredStandard.attached)
-        XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
-
-        postCommand(.focusBottomInput, sessionID: commandSessionID)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        let focusedPage = try pageMetrics(
-            in: app,
-            matching: {
-                $0.activeElement == "bottom-input"
-                    && $0.revision > excludedPage.revision
-                    && $0.bottomInputBottom <= $0.viewportHeight
-            }
-        )
-        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > restoredStandard.revision })
-        XCTAssertEqual(focusedPage.activeElement, "bottom-input")
-        XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
-        XCTAssertGreaterThanOrEqual(focusedNative.effectiveBottom, reattached.effectiveBottom)
-    }
-
-    @MainActor
-    func testLegacyKeyboardFocusDoesNotDoubleCountBottomInset() throws {
         if #available(iOS 26.0, *) {
-            throw XCTSkip("Legacy fallback path only")
+            try verifyModernViewportSequence(
+                in: app,
+                sessionID: commandSessionID,
+                chromeHiddenNative: chromeHiddenNative,
+                chromeHiddenPage: chromeHiddenPage
+            )
+        } else {
+            try verifyLegacyKeyboardSequence(
+                in: app,
+                sessionID: commandSessionID,
+                baselineNative: chromeHiddenNative,
+                baselinePage: chromeHiddenPage
+            )
         }
-
-        let commandSessionID = UUID().uuidString
-        let app = launchApp(commandSessionID: commandSessionID)
-        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
-
-        let initialNative = try nativeMetrics(in: app)
-        postCommand(.focusBottomInput, sessionID: commandSessionID)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > initialNative.revision })
-        let keyboardHeight = Int(app.keyboards.firstMatch.frame.height.rounded())
-        let bottomInsetDelta = focusedNative.adjustedBottom - initialNative.adjustedBottom
-
-        XCTAssertGreaterThan(keyboardHeight, 0)
-        XCTAssertLessThan(
-            bottomInsetDelta,
-            Int((Double(keyboardHeight) * 1.6).rounded()),
-            "legacy path should not add roughly two keyboard heights: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)"
-        )
-    }
-
-    @MainActor
-    func testKeyboardFocusKeepsFixedBottomMarkerWithinVisualViewport() throws {
-        let commandSessionID = UUID().uuidString
-        let app = launchApp(commandSessionID: commandSessionID)
-        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
-
-        let initialPage = try pageMetrics(in: app)
-        postCommand(.focusBottomInput, sessionID: commandSessionID)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-
-        let focusedPage = try pageMetrics(in: app, matching: { page in
-            page.activeElement == "bottom-input" && page.revision > initialPage.revision
-        })
-
-        XCTAssertLessThanOrEqual(
-            focusedPage.fixedBottomBottom,
-            focusedPage.viewportHeight,
-            "fixed bottom marker should stay within the visual viewport after keyboard presentation: bottom=\(focusedPage.fixedBottomBottom), viewport=\(focusedPage.viewportHeight)"
-        )
-        XCTAssertTrue(focusedPage.fixedBottomWithinViewport)
-    }
-
-    @MainActor
-    func testFixedBottomMarkerStaysWithinVisualViewportAcrossLegacyAndModernPaths() throws {
-        let commandSessionID = UUID().uuidString
-        let app = launchApp(commandSessionID: commandSessionID)
-        try waitForCommandReceiverReady(in: app, sessionID: commandSessionID)
-
-        let initialPage = try pageMetrics(in: app)
-        XCTAssertLessThanOrEqual(
-            initialPage.fixedBottomBottom,
-            initialPage.viewportHeight,
-            "fixed bottom marker should stay within the visual viewport: bottom=\(initialPage.fixedBottomBottom), viewport=\(initialPage.viewportHeight)"
-        )
-        XCTAssertTrue(initialPage.fixedBottomWithinViewport)
-
-        postCommand(.setChromeMode(.navigationBarVisible), sessionID: commandSessionID)
-        let navigationBarVisiblePage = try pageMetrics(in: app, matching: { page in
-            page.status == "ready" && page.revision > initialPage.revision
-        })
-
-        XCTAssertLessThanOrEqual(
-            navigationBarVisiblePage.fixedBottomBottom,
-            navigationBarVisiblePage.viewportHeight,
-            "fixed bottom marker should remain visible after chrome updates: bottom=\(navigationBarVisiblePage.fixedBottomBottom), viewport=\(navigationBarVisiblePage.viewportHeight)"
-        )
-        XCTAssertTrue(navigationBarVisiblePage.fixedBottomWithinViewport)
     }
 }
 
@@ -285,6 +159,128 @@ private extension MiniBrowserUITests {
         let fixedBottomBottom: Int
         let viewportHeight: Int
         let fixedBottomWithinViewport: Bool
+    }
+
+    @available(iOS 26.0, *)
+    func verifyModernViewportSequence(
+        in app: XCUIApplication,
+        sessionID: String,
+        chromeHiddenNative: NativeMetrics,
+        chromeHiddenPage: PageMetrics
+    ) throws {
+        postCommand(.setAttachment(.detached), sessionID: sessionID)
+        let detached = try nextNativeMetrics(after: chromeHiddenNative.revision, in: app)
+        XCTAssertFalse(detached.attached)
+        XCTAssertFalse(detached.windowAttached)
+        XCTAssertEqual(detached.expectedTop, 0)
+        XCTAssertEqual(detached.expectedBottom, 0)
+
+        postCommand(.setAttachment(.attached), sessionID: sessionID)
+        let reattached = try nextNativeMetrics(after: detached.revision, in: app)
+        XCTAssertTrue(reattached.attached)
+        XCTAssertTrue(reattached.windowAttached)
+        XCTAssertEqual(reattached.obscuredTop, reattached.expectedTop)
+        XCTAssertGreaterThan(reattached.effectiveTop, 0)
+        XCTAssertGreaterThan(reattached.effectiveBottom, 0)
+
+        postCommand(.setScenario(.neverAdjustment), sessionID: sessionID)
+        let neverNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "neverAdjustment" && $0.revision > reattached.revision }
+        )
+        let neverPage = try pageMetrics(in: app, matching: { $0.revision > chromeHiddenPage.revision })
+        XCTAssertEqual(neverNative.effectiveTop, neverNative.obscuredTop)
+        XCTAssertEqual(neverNative.effectiveBottom, neverNative.obscuredBottom)
+        XCTAssertLessThanOrEqual(neverNative.adjustedTop, neverNative.effectiveTop)
+        XCTAssertLessThanOrEqual(neverNative.adjustedBottom, neverNative.effectiveBottom)
+
+        postCommand(.setScenario(.standard), sessionID: sessionID)
+        let standardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "standard" && $0.revision > neverNative.revision }
+        )
+
+        postCommand(.setChromeMode(.navigationBarVisible), sessionID: sessionID)
+        let visibleStandardBeforeExcludedNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.scenario == "standard"
+                    && $0.revision > standardBeforeExcludedNative.revision
+            }
+        )
+        let visibleStandardBeforeExcludedPage = try pageMetrics(in: app, matching: { $0.revision > neverPage.revision })
+
+        postCommand(.setScenario(.excludeTopSafeArea), sessionID: sessionID)
+        let excludedNative = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "excludeTopSafeArea" && $0.revision > visibleStandardBeforeExcludedNative.revision }
+        )
+        let excludedPage = try pageMetrics(in: app, matching: { $0.revision > visibleStandardBeforeExcludedPage.revision })
+        XCTAssertEqual(excludedNative.scenario, "excludeTopSafeArea")
+        XCTAssertGreaterThan(excludedPage.revision, visibleStandardBeforeExcludedPage.revision)
+
+        postCommand(.setScenario(.standard), sessionID: sessionID)
+        let restoredStandard = try nativeMetrics(
+            in: app,
+            matching: { $0.scenario == "standard" && $0.revision > excludedNative.revision }
+        )
+        XCTAssertTrue(restoredStandard.attached)
+        XCTAssertEqual(restoredStandard.obscuredTop, restoredStandard.expectedTop)
+
+        postCommand(.focusBottomInput, sessionID: sessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let focusedPage = try pageMetrics(
+            in: app,
+            matching: {
+                $0.activeElement == "bottom-input"
+                    && $0.revision > excludedPage.revision
+                    && $0.bottomInputBottom <= $0.viewportHeight
+            }
+        )
+        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > restoredStandard.revision })
+        XCTAssertEqual(focusedPage.activeElement, "bottom-input")
+        XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
+        XCTAssertGreaterThanOrEqual(focusedNative.effectiveBottom, reattached.effectiveBottom)
+        assertFixedBottomWithinViewport(focusedPage, context: "keyboard focused")
+    }
+
+    func verifyLegacyKeyboardSequence(
+        in app: XCUIApplication,
+        sessionID: String,
+        baselineNative: NativeMetrics,
+        baselinePage: PageMetrics
+    ) throws {
+        postCommand(.focusBottomInput, sessionID: sessionID)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let focusedPage = try pageMetrics(
+            in: app,
+            matching: {
+                $0.activeElement == "bottom-input"
+                    && $0.revision > baselinePage.revision
+            }
+        )
+        let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > baselineNative.revision })
+        let keyboardHeight = Int(app.keyboards.firstMatch.frame.height.rounded())
+        let bottomInsetDelta = focusedNative.adjustedBottom - baselineNative.adjustedBottom
+
+        XCTAssertEqual(focusedPage.activeElement, "bottom-input")
+        assertFixedBottomWithinViewport(focusedPage, context: "legacy keyboard focused")
+        XCTAssertGreaterThan(keyboardHeight, 0)
+        XCTAssertLessThan(
+            bottomInsetDelta,
+            Int((Double(keyboardHeight) * 1.6).rounded()),
+            "legacy path should not add roughly two keyboard heights: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)"
+        )
+    }
+
+    func assertFixedBottomWithinViewport(_ page: PageMetrics, context: String) {
+        XCTAssertLessThanOrEqual(
+            page.fixedBottomBottom,
+            page.viewportHeight,
+            "fixed bottom marker should stay within the visual viewport during \(context): bottom=\(page.fixedBottomBottom), viewport=\(page.viewportHeight)"
+        )
+        XCTAssertTrue(page.fixedBottomWithinViewport)
     }
 
     func launchApp(commandSessionID: String) -> XCUIApplication {
