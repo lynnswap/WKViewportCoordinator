@@ -167,6 +167,5 @@ jobs:
             echo "MiniBrowser self-test did not emit a result marker"
             exit 1
           fi
-          RESULT_JSON="${RESULT_LINE#MINIBROWSER_SELF_TEST_RESULT }"
-          ruby -rjson -e 'result = JSON.parse(ARGV.fetch(0)); abort("MiniBrowser self-test failed: #{result}") unless result["status"] == "passed"' "${RESULT_JSON}"
+          ruby -rjson -e 'payload = ARGV.fetch(0).split("MINIBROWSER_SELF_TEST_RESULT", 2).fetch(1).strip; result = JSON.parse(payload); abort("MiniBrowser self-test failed: #{result}") unless result["status"] == "passed"' "${RESULT_LINE}"
           exit "${SELF_TEST_STATUS}"

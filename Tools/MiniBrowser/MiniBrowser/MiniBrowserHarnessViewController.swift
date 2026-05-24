@@ -144,6 +144,7 @@ final class MiniBrowserHarnessState {
     let webView: ManagedViewportWebView
     let selfTestMode: SelfTestMode?
     private let selfTestInputDelegate: MiniBrowserSelfTestInputDelegate?
+    private let selfTestInputDelegateInstalled: Bool
     private(set) var scenario: Scenario
     private(set) var chromeMode: ChromeMode
     private(set) var isAttached = true
@@ -161,29 +162,35 @@ final class MiniBrowserHarnessState {
         let webView = ManagedViewportWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
-        if let selfTestInputDelegate {
-            Self.installSelfTestInputDelegate(selfTestInputDelegate, on: webView)
-        }
+        let selfTestInputDelegateInstalled = selfTestInputDelegate.map {
+            Self.installSelfTestInputDelegate($0, on: webView)
+        } ?? false
 
         self.webView = webView
         self.selfTestMode = selfTestMode
         self.selfTestInputDelegate = selfTestInputDelegate
+        self.selfTestInputDelegateInstalled = selfTestInputDelegateInstalled
         scenario = initialScenario
         chromeMode = initialChromeMode
         nativeMetrics = NativeMetrics.idle(for: initialScenario, chromeMode: initialChromeMode)
         applyViewportBehavior(for: initialScenario)
     }
 
-    private static func installSelfTestInputDelegate(_ inputDelegate: MiniBrowserSelfTestInputDelegate, on webView: WKWebView) {
+    private static func installSelfTestInputDelegate(_ inputDelegate: MiniBrowserSelfTestInputDelegate, on webView: WKWebView) -> Bool {
         let selector = NSSelectorFromString("_setInputDelegate:")
         guard webView.responds(to: selector) else {
-            return
+            return false
         }
 
         typealias SetInputDelegate = @convention(c) (AnyObject, Selector, AnyObject) -> Void
         let implementation = webView.method(for: selector)
         let setInputDelegate = unsafeBitCast(implementation, to: SetInputDelegate.self)
         setInputDelegate(webView, selector, inputDelegate)
+        return true
+    }
+
+    var shouldRequireSelfTestInputSessionStart: Bool {
+        selfTestInputDelegateInstalled
     }
 
     var selfTestInputSessionStartCount: Int {
@@ -343,6 +350,21 @@ final class MiniBrowserHarnessState {
             throw PageMetricsError.focusFailed("focus failed")
         }
         return pageMetrics
+    }
+
+    @discardableResult
+    func focusBottomInputAndRefreshPageMetrics(afterViewportHeightChangeFrom previousViewportHeight: Int) async throws -> PageMetrics {
+        guard fixtureLoaded else {
+            setPageMetricsLoading()
+            throw PageMetricsError.fixtureNotLoaded
+        }
+
+        let rawJSON = try await callAsyncJavaScriptString(
+            "return window.testHarness.focusInputAndCapture('bottom-input', \(previousViewportHeight));"
+        )
+        let metrics = try decodePageMetrics(from: rawJSON)
+        pageMetrics = metrics
+        return metrics
     }
 
     @discardableResult
@@ -877,9 +899,14 @@ final class MiniBrowserHarnessViewController: UIViewController {
             }
             do {
                 let baselinePage = try await state.refreshPageMetrics()
-                try await state.focusBottomInputForSelfTest()
+                if #available(iOS 26.0, *) {
+                    try await state.focusBottomInputAndRefreshPageMetrics(
+                        afterViewportHeightChangeFrom: baselinePage.viewportHeight
+                    )
+                } else {
+                    try await state.focusBottomInputForSelfTest()
+                }
                 flushLayout()
-                try await state.refreshPageMetrics(afterViewportHeightChangeFrom: baselinePage.viewportHeight)
                 try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
                 state.captureNativeMetrics(in: self)
             } catch {
@@ -970,6 +997,7 @@ extension MiniBrowserHarnessViewController: WKNavigationDelegate {
         }
         state.markPageMetricsError(error.localizedDescription)
         scheduleNativeCapture()
+        startSelfTestIfReady()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -978,6 +1006,7 @@ extension MiniBrowserHarnessViewController: WKNavigationDelegate {
         }
         state.markPageMetricsError(error.localizedDescription)
         scheduleNativeCapture()
+        startSelfTestIfReady()
     }
 }
 
@@ -989,12 +1018,28 @@ private extension MiniBrowserHarnessViewController {
         guard state.selfTestMode == .viewport else {
             return
         }
-        guard didStartSelfTest == false, state.fixtureLoaded, view.window != nil else {
+        guard didStartSelfTest == false, view.window != nil else {
+            return
+        }
+
+        startSelfTestWatchdog()
+        if state.pageMetrics.status == "error" {
+            didStartSelfTest = true
+            finishSelfTest(
+                status: "failed",
+                checks: currentSelfTestChecks,
+                failure: state.pageMetrics.errorMessage ?? "fixture-load-failed",
+                nativeMetrics: state.nativeMetrics,
+                pageMetrics: state.pageMetrics,
+                exitCode: 1
+            )
+        }
+
+        guard state.fixtureLoaded else {
             return
         }
 
         didStartSelfTest = true
-        startSelfTestWatchdog()
         selfTestTask = Task { @MainActor [weak self] in
             guard let self else {
                 return
@@ -1004,16 +1049,21 @@ private extension MiniBrowserHarnessViewController {
     }
 
     func startSelfTestWatchdog() {
+        guard selfTestWatchdog == nil else {
+            return
+        }
+
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 60)
         timer.setEventHandler { [weak self] in
             guard let self else {
                 return
             }
+            let failure = self.state.fixtureLoaded ? "deadlock-watchdog" : "fixture-load-timeout"
             self.finishSelfTest(
                 status: "failed",
                 checks: self.currentSelfTestChecks,
-                failure: "deadlock-watchdog",
+                failure: failure,
                 nativeMetrics: self.state.nativeMetrics,
                 pageMetrics: self.state.pageMetrics,
                 exitCode: 1
@@ -1064,10 +1114,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyChromeMode(.navigationBarVisible)
         render()
-        let chromeVisible = try await refreshSnapshot(
-            includePage: true,
-            afterViewportHeightChangeFrom: initialPage.viewportHeight
-        )
+        let chromeVisible = try await refreshSnapshot(includePage: true)
         let chromeVisiblePage = try requirePage(chromeVisible.page)
         try check("navigation chrome", chromeVisible.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarVisible.rawValue, checks: &checks)
         try check("navigation fixed bottom", chromeVisiblePage.fixedBottomWithinViewport, checks: &checks)
@@ -1100,10 +1147,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyChromeMode(.navigationBarHidden)
         render()
-        let chromeHidden = try await refreshSnapshot(
-            includePage: true,
-            afterViewportHeightChangeFrom: excludedPage.viewportHeight
-        )
+        let chromeHidden = try await refreshSnapshot(includePage: true)
         let chromeHiddenPage = try requirePage(chromeHidden.page)
         try check("restored chrome hidden", chromeHidden.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarHidden.rawValue, checks: &checks)
         try check("restored fixed bottom", chromeHiddenPage.fixedBottomWithinViewport, checks: &checks)
@@ -1193,17 +1237,26 @@ private extension MiniBrowserHarnessViewController {
     ) {
         let keyboardObserver = KeyboardFrameObserver()
         let inputSessionBaseline = state.selfTestInputSessionStartCount
-        try await state.focusBottomInputForSelfTest()
+        let resizedPage: PageMetrics
+        if #available(iOS 26.0, *) {
+            resizedPage = try await state.focusBottomInputAndRefreshPageMetrics(
+                afterViewportHeightChangeFrom: baselinePage.viewportHeight
+            )
+        } else {
+            try await state.focusBottomInputForSelfTest()
+            resizedPage = try await state.refreshPageMetrics()
+        }
         flushLayout()
-        let resizedPage = try await state.refreshPageMetrics(afterViewportHeightChangeFrom: baselinePage.viewportHeight)
         let page = try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
         let native = state.captureNativeMetrics(in: self)
         let notifiedKeyboardHeight = Int((keyboardObserver.frame?.height ?? 0).rounded())
         let currentKeyboardHeight = Self.currentKeyboardHeight()
         let visualViewportKeyboardHeight = max(0, baselinePage.viewportHeight - resizedPage.viewportHeight)
         let keyboardHeight = max(notifiedKeyboardHeight, currentKeyboardHeight, visualViewportKeyboardHeight)
-        guard state.selfTestInputSessionStartCount > inputSessionBaseline else {
-            throw MiniBrowserSelfTestFailure(message: "keyboard input session did not start")
+        if state.shouldRequireSelfTestInputSessionStart {
+            guard state.selfTestInputSessionStartCount > inputSessionBaseline else {
+                throw MiniBrowserSelfTestFailure(message: "keyboard input session did not start")
+            }
         }
         return (native, page, keyboardHeight)
     }
