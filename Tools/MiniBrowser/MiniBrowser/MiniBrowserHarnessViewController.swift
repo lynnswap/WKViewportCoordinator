@@ -1244,6 +1244,7 @@ private extension MiniBrowserHarnessViewController {
             )
         } else {
             try await state.focusBottomInputForSelfTest()
+            await keyboardObserver.nextFrame()
             resizedPage = try await state.refreshPageMetrics()
         }
         flushLayout()
@@ -1359,6 +1360,7 @@ private struct MiniBrowserSelfTestFailure: Error, CustomStringConvertible {
 private final class KeyboardFrameObserver {
     private let notificationCenter: NotificationCenter
     private var observer: NSObjectProtocol?
+    private var frameContinuation: CheckedContinuation<CGRect, Never>?
     private(set) var frame: CGRect?
 
     init(notificationCenter: NotificationCenter = .default) {
@@ -1376,7 +1378,26 @@ private final class KeyboardFrameObserver {
     }
 
     isolated deinit {
+        if let frameContinuation {
+            self.frameContinuation = nil
+            frameContinuation.resume(returning: frame ?? .null)
+        }
         invalidate()
+    }
+
+    @discardableResult
+    func nextFrame() async -> CGRect {
+        if let frame {
+            return frame
+        }
+
+        return await withCheckedContinuation { continuation in
+            if let frame {
+                continuation.resume(returning: frame)
+            } else {
+                frameContinuation = continuation
+            }
+        }
     }
 
     private func receive(_ frame: CGRect) {
@@ -1384,6 +1405,10 @@ private final class KeyboardFrameObserver {
             return
         }
         self.frame = frame
+        if let frameContinuation {
+            self.frameContinuation = nil
+            frameContinuation.resume(returning: frame)
+        }
         invalidate()
     }
 
