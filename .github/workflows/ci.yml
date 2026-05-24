@@ -153,19 +153,50 @@ jobs:
           xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
           xcrun simctl install "${SIMULATOR_UDID}" "${APP_PATH}"
 
+          APP_DATA_CONTAINER="$(xcrun simctl get_app_container "${SIMULATOR_UDID}" lynnpd.MiniBrowser data)"
+          RESULT_PIPE="${APP_DATA_CONTAINER}/tmp/MiniBrowserSelfTestResult.pipe"
+          RESULT_JSON="${RUNNER_TEMP}/MiniBrowserSelfTestResult.json"
+          mkdir -p "$(dirname "${RESULT_PIPE}")"
+          rm -f "${RESULT_PIPE}" "${RESULT_JSON}"
+          mkfifo "${RESULT_PIPE}"
+
+          ruby - "${RESULT_PIPE}" "${RESULT_JSON}" <<'RUBY' &
+          require "json"
+          require "timeout"
+
+          pipe_path, result_path = ARGV
+          watchdog_seconds = 90
+
+          begin
+            payload = Timeout.timeout(watchdog_seconds) do
+              File.open(pipe_path, "r") { |pipe| pipe.gets }
+            end
+            abort("MiniBrowser self-test result pipe closed without a result") if payload.nil? || payload.strip.empty?
+
+            payload = payload.strip
+            result = JSON.parse(payload)
+            File.write(result_path, JSON.pretty_generate(result) + "\n")
+            puts "MINIBROWSER_SELF_TEST_RESULT #{payload}"
+            abort("MiniBrowser self-test failed: #{payload}") unless result["status"] == "passed"
+          rescue Timeout::Error
+            abort("MiniBrowser self-test did not write a result within #{watchdog_seconds} seconds")
+          rescue JSON::ParserError => error
+            abort("MiniBrowser self-test emitted invalid JSON: #{error.message}")
+          end
+          RUBY
+          SELF_TEST_READER_PID=$!
+
           set +e
-          SELF_TEST_OUTPUT="$(
-            SIMCTL_CHILD_MINIBROWSER_SELF_TEST=viewport \
-              xcrun simctl launch --console --terminate-running-process "${SIMULATOR_UDID}" lynnpd.MiniBrowser 2>&1
-          )"
+          SIMCTL_CHILD_MINIBROWSER_SELF_TEST=viewport \
+            SIMCTL_CHILD_MINIBROWSER_SELF_TEST_RESULT_PATH="${RESULT_PIPE}" \
+            xcrun simctl launch --terminate-running-process "${SIMULATOR_UDID}" lynnpd.MiniBrowser
           SELF_TEST_STATUS=$?
           set -e
 
-          printf '%s\n' "${SELF_TEST_OUTPUT}"
-          RESULT_LINE="$(grep "MINIBROWSER_SELF_TEST_RESULT" <<< "${SELF_TEST_OUTPUT}" | tail -n 1 || true)"
-          if [[ -z "${RESULT_LINE}" ]]; then
-            echo "MiniBrowser self-test did not emit a result marker"
-            exit 1
+          if [[ "${SELF_TEST_STATUS}" -ne 0 ]]; then
+            kill "${SELF_TEST_READER_PID}" 2>/dev/null || true
+            wait "${SELF_TEST_READER_PID}" 2>/dev/null || true
+            exit "${SELF_TEST_STATUS}"
           fi
-          ruby -rjson -e 'payload = ARGV.fetch(0).split("MINIBROWSER_SELF_TEST_RESULT", 2).fetch(1).strip; result = JSON.parse(payload); abort("MiniBrowser self-test failed: #{result}") unless result["status"] == "passed"' "${RESULT_LINE}"
-          exit "${SELF_TEST_STATUS}"
+
+          wait "${SELF_TEST_READER_PID}"

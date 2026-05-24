@@ -1,4 +1,5 @@
 import Darwin
+import Foundation
 import ObjectiveC
 import Observation
 import SwiftUI
@@ -1277,13 +1278,29 @@ private extension MiniBrowserHarnessViewController {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        if let data = try? encoder.encode(result), let json = String(data: data, encoding: .utf8) {
-            print("MINIBROWSER_SELF_TEST_RESULT \(json)")
+        let json: String
+        if let data = try? encoder.encode(result), let encodedJSON = String(data: data, encoding: .utf8) {
+            json = encodedJSON
         } else {
-            print("MINIBROWSER_SELF_TEST_RESULT {\"status\":\"failed\",\"failure\":\"encoding-failed\"}")
+            json = "{\"failure\":\"encoding-failed\",\"status\":\"failed\"}"
         }
+        writeSelfTestResult(json)
+        print("MINIBROWSER_SELF_TEST_RESULT \(json)")
         fflush(stdout)
         exit(exitCode)
+    }
+
+    private func writeSelfTestResult(_ json: String) {
+        guard let path = ProcessInfo.processInfo.environment["MINIBROWSER_SELF_TEST_RESULT_PATH"], path.isEmpty == false else {
+            return
+        }
+
+        do {
+            try Data((json + "\n").utf8).write(to: URL(fileURLWithPath: path))
+        } catch {
+            fputs("MiniBrowser self-test result write failed: \(error)\n", stderr)
+            fflush(stderr)
+        }
     }
 
     static func currentKeyboardHeight() -> Int {
