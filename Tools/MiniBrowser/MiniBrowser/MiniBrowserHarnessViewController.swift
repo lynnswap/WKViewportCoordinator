@@ -309,7 +309,10 @@ final class MiniBrowserHarnessState {
     }
 
     @discardableResult
-    func refreshPageMetrics(afterViewportHeightChangeFrom previousViewportHeight: Int? = nil) async throws -> PageMetrics {
+    func refreshPageMetrics(
+        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil,
+        afterRenderingUpdate: Bool = false
+    ) async throws -> PageMetrics {
         guard fixtureLoaded else {
             setPageMetricsLoading()
             throw PageMetricsError.fixtureNotLoaded
@@ -318,6 +321,8 @@ final class MiniBrowserHarnessState {
         let script: String
         if let previousViewportHeight {
             script = "return window.testHarness.captureStateAfterViewportChange(\(previousViewportHeight));"
+        } else if afterRenderingUpdate {
+            script = "return window.testHarness.captureStateAfterRenderingUpdate();"
         } else {
             script = "return window.testHarness.captureState();"
         }
@@ -931,7 +936,8 @@ final class MiniBrowserHarnessViewController: UIViewController {
     @discardableResult
     private func refreshSnapshot(
         includePage: Bool,
-        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil
+        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil,
+        afterRenderingUpdate: Bool = false
     ) async throws -> (
         native: MiniBrowserHarnessState.NativeMetrics,
         page: MiniBrowserHarnessState.PageMetrics?
@@ -941,7 +947,10 @@ final class MiniBrowserHarnessViewController: UIViewController {
         guard includePage else {
             return (native, nil)
         }
-        let page = try await state.refreshPageMetrics(afterViewportHeightChangeFrom: previousViewportHeight)
+        let page = try await state.refreshPageMetrics(
+            afterViewportHeightChangeFrom: previousViewportHeight,
+            afterRenderingUpdate: afterRenderingUpdate
+        )
         flushLayout()
         let refreshedNative = state.captureNativeMetrics(in: self)
         return (refreshedNative, page)
@@ -1093,7 +1102,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyChromeMode(.navigationBarVisible)
         render()
-        let chromeVisible = try await refreshSnapshot(includePage: true)
+        let chromeVisible = try await refreshSnapshot(includePage: true, afterRenderingUpdate: true)
         let chromeVisiblePage = try requirePage(chromeVisible.page)
         try check("navigation chrome", chromeVisible.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarVisible.rawValue, checks: &checks)
         try check("navigation fixed bottom", chromeVisiblePage.fixedBottomWithinViewport, checks: &checks)
@@ -1104,7 +1113,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.excludeTopSafeArea)
         render()
-        let excluded = try await refreshSnapshot(includePage: true)
+        let excluded = try await refreshSnapshot(includePage: true, afterRenderingUpdate: true)
         let excludedPage = try requirePage(excluded.page)
         try check("exclude top scenario", excluded.native.scenario == MiniBrowserHarnessState.Scenario.excludeTopSafeArea.rawValue, checks: &checks)
         try check(
@@ -1122,11 +1131,11 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.standard)
         render()
-        try await refreshSnapshot(includePage: true)
+        try await refreshSnapshot(includePage: true, afterRenderingUpdate: true)
 
         state.applyChromeMode(.navigationBarHidden)
         render()
-        let chromeHidden = try await refreshSnapshot(includePage: true)
+        let chromeHidden = try await refreshSnapshot(includePage: true, afterRenderingUpdate: true)
         let chromeHiddenPage = try requirePage(chromeHidden.page)
         try check("restored chrome hidden", chromeHidden.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarHidden.rawValue, checks: &checks)
         try check("restored fixed bottom", chromeHiddenPage.fixedBottomWithinViewport, checks: &checks)

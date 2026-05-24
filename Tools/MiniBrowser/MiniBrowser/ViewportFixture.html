@@ -176,12 +176,19 @@
             });
         };
 
+        const waitForRenderingUpdateAndBuildState = () => new Promise((resolve) => {
+            requestAnimationFrame(() => resolve(buildState()));
+        });
+
         window.testHarness = {
             captureState() {
                 return withErrorState(buildState);
             },
             captureStateAfterViewportChange(previousViewportHeight) {
                 return withErrorState(() => waitForViewportChangeAndBuildState(previousViewportHeight));
+            },
+            captureStateAfterRenderingUpdate() {
+                return withErrorState(waitForRenderingUpdateAndBuildState);
             },
             focusInput(identifier) {
                 return withErrorState(() => JSON.stringify({ status: focusInput(identifier) ? "ready" : "error" }));
