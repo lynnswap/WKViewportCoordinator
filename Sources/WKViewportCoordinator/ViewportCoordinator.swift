@@ -3,25 +3,56 @@ import Combine
 import UIKit
 import WebKit
 
+/// Controls how bottom chrome contributes to the final obscured viewport inset.
 public enum BottomChromeMode: Equatable {
+    /// Includes bottom chrome, such as a tab bar or toolbar, in the bottom obscured height.
     case normal
+
+    /// Ignores bottom chrome while keyboard or input accessory overlap is active.
     case hiddenForKeyboard
 }
 
+/// Describes the scroll edge effect style applied to a managed web view.
 public enum ScrollEdgeEffectStyle: Equatable {
+    /// Uses UIKit's automatic edge effect style.
     case automatic
+
+    /// Uses a hard edge effect style.
     case hard
+
+    /// Uses a soft edge effect style.
     case soft
 }
 
+/// Configuration values used when applying viewport metrics to a `WKWebView`.
 public struct ViewportConfiguration: Equatable {
+    /// The content inset adjustment behavior assigned to the web view's scroll view.
     public var contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
+
+    /// A Boolean value indicating whether the top scroll edge effect is hidden.
     public var topEdgeEffectHidden: Bool
+
+    /// A Boolean value indicating whether the bottom scroll edge effect is hidden.
     public var bottomEdgeEffectHidden: Bool
+
+    /// The style applied to the top scroll edge effect.
     public var topEdgeEffectStyle: ScrollEdgeEffectStyle
+
+    /// The style applied to the bottom scroll edge effect.
     public var bottomEdgeEffectStyle: ScrollEdgeEffectStyle
+
+    /// The safe area edges that should affect obscured inset calculations.
     public var safeAreaAffectedEdges: UIRectEdge
 
+    /// Creates a viewport configuration.
+    ///
+    /// - Parameters:
+    ///   - contentInsetAdjustmentBehavior: The content inset adjustment behavior for the web view's scroll view.
+    ///   - topEdgeEffectHidden: Whether the top scroll edge effect should be hidden.
+    ///   - bottomEdgeEffectHidden: Whether the bottom scroll edge effect should be hidden.
+    ///   - topEdgeEffectStyle: The style for the top scroll edge effect.
+    ///   - bottomEdgeEffectStyle: The style for the bottom scroll edge effect.
+    ///   - safeAreaAffectedEdges: The safe area edges that should affect obscured inset calculations.
     public init(
         contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior = .always,
         topEdgeEffectHidden: Bool = false,
@@ -39,10 +70,19 @@ public struct ViewportConfiguration: Equatable {
     }
 }
 
+/// Safe area values used to calculate viewport and fallback scroll metrics.
 public struct ViewportSafeAreaMetrics: Equatable {
+    /// The safe area projected from the host window into the web view's host coordinate space.
     public var viewport: UIEdgeInsets
+
+    /// The host view's safe area baseline used by the legacy fallback path.
     public var legacyFallbackBaseline: UIEdgeInsets
 
+    /// Creates safe area metrics for viewport coordination.
+    ///
+    /// - Parameters:
+    ///   - viewport: The projected viewport safe area.
+    ///   - legacyFallbackBaseline: The baseline safe area used by the legacy fallback path.
     public init(
         viewport: UIEdgeInsets,
         legacyFallbackBaseline: UIEdgeInsets
@@ -52,15 +92,39 @@ public struct ViewportSafeAreaMetrics: Equatable {
     }
 }
 
+/// A snapshot of the viewport state that should be applied to a `WKWebView`.
 public struct ViewportMetrics: Equatable {
+    /// The safe area values used for viewport and legacy fallback calculations.
     public var safeArea: ViewportSafeAreaMetrics
+
+    /// The height obscured from the top edge by safe area and visible chrome.
     public var topObscuredHeight: CGFloat
+
+    /// The height obscured from the bottom edge by visible chrome.
     public var bottomObscuredHeight: CGFloat
+
+    /// The height of the keyboard overlap inside the metrics host view.
     public var keyboardOverlapHeight: CGFloat
+
+    /// The height of the input accessory overlap inside the metrics host view.
     public var inputAccessoryOverlapHeight: CGFloat
+
+    /// The mode used when combining bottom chrome with keyboard and accessory overlap.
     public var bottomChromeMode: BottomChromeMode
+
+    /// The safe area edges that should affect obscured inset calculations.
     public var safeAreaAffectedEdges: UIRectEdge
 
+    /// Creates viewport metrics.
+    ///
+    /// - Parameters:
+    ///   - safeArea: The safe area values used for viewport and fallback calculations.
+    ///   - topObscuredHeight: The height obscured from the top edge.
+    ///   - bottomObscuredHeight: The height obscured from the bottom edge by visible chrome.
+    ///   - keyboardOverlapHeight: The height overlapped by the keyboard.
+    ///   - inputAccessoryOverlapHeight: The height overlapped by the input accessory view.
+    ///   - bottomChromeMode: The mode used when combining bottom chrome with keyboard and accessory overlap.
+    ///   - safeAreaAffectedEdges: The safe area edges that should affect obscured inset calculations.
     public init(
         safeArea: ViewportSafeAreaMetrics,
         topObscuredHeight: CGFloat,
@@ -79,6 +143,7 @@ public struct ViewportMetrics: Equatable {
         self.safeAreaAffectedEdges = safeAreaAffectedEdges
     }
 
+    /// The obscured insets produced by combining chrome, keyboard, and input accessory overlap.
     public var finalObscuredInsets: UIEdgeInsets {
         UIEdgeInsets(
             top: max(0, topObscuredHeight),
@@ -191,8 +256,17 @@ struct AppliedViewportState: Equatable {
     }
 }
 
+/// A type that measures the viewport state for a host view controller and web view.
 @MainActor
 public protocol ViewportMetricsSource {
+    /// Returns viewport metrics for the current host, web view, keyboard, and input accessory state.
+    ///
+    /// - Parameters:
+    ///   - hostViewController: The view controller that hosts the web view.
+    ///   - webView: The web view whose viewport is being coordinated.
+    ///   - keyboardOverlapHeight: The keyboard overlap height measured in the metrics host view.
+    ///   - inputAccessoryOverlapHeight: The input accessory overlap height measured in the metrics host view.
+    /// - Returns: Metrics that describe the viewport state to apply to the web view.
     func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
@@ -201,10 +275,20 @@ public protocol ViewportMetricsSource {
     ) -> ViewportMetrics
 }
 
+/// Default metrics provider for UIKit-hosted `WKWebView` viewport coordination.
 @MainActor
 public final class ViewportMetricsProvider: ViewportMetricsSource {
+    /// Creates the default metrics provider.
     public init() {}
 
+    /// Measures safe area, visible navigation chrome, tab bar, toolbar, keyboard, and input accessory overlap.
+    ///
+    /// - Parameters:
+    ///   - hostViewController: The view controller that hosts the web view.
+    ///   - webView: The web view whose viewport is being coordinated.
+    ///   - keyboardOverlapHeight: The keyboard overlap height measured by the coordinator.
+    ///   - inputAccessoryOverlapHeight: The input accessory overlap height measured by the coordinator.
+    /// - Returns: Metrics suitable for the coordinator's default viewport update path.
     public func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
@@ -374,20 +458,30 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
     }
 }
 
+/// Coordinates a `WKWebView` viewport with UIKit safe areas, visible chrome, keyboard, and input accessory geometry.
 @MainActor
 public final class ViewportCoordinator: NSObject {
+    /// The view controller that hosts the web view.
+    ///
+    /// If this value is `nil`, the coordinator resolves a host from the web view's responder chain or window root.
     public weak var hostViewController: UIViewController? {
         didSet {
             lastAppliedViewportState = nil
             updateViewport()
         }
     }
+
+    /// The web view whose viewport is coordinated.
     public weak var webView: WKWebView?
+
+    /// The configuration applied during viewport updates.
     public var configuration: ViewportConfiguration {
         didSet {
             updateViewport()
         }
     }
+
+    /// The object that produces viewport metrics for each update.
     public var metricsProvider: any ViewportMetricsSource {
         didSet {
             lastAppliedViewportState = nil
@@ -436,6 +530,13 @@ public final class ViewportCoordinator: NSObject {
     }
 #endif
 
+    /// Creates a viewport coordinator for a web view.
+    ///
+    /// - Parameters:
+    ///   - hostViewController: The view controller that hosts the web view. Pass `nil` to resolve it automatically.
+    ///   - webView: The web view whose viewport should be coordinated.
+    ///   - configuration: The configuration used when applying viewport updates.
+    ///   - metricsProvider: The object that produces viewport metrics.
     public init(
         hostViewController: UIViewController? = nil,
         webView: WKWebView,
@@ -452,6 +553,12 @@ public final class ViewportCoordinator: NSObject {
         updateViewport()
     }
 
+    /// Creates a viewport coordinator that resolves its host view controller automatically.
+    ///
+    /// - Parameters:
+    ///   - webView: The web view whose viewport should be coordinated.
+    ///   - configuration: The configuration used when applying viewport updates.
+    ///   - metricsProvider: The object that produces viewport metrics.
     public convenience init(
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
@@ -469,10 +576,12 @@ public final class ViewportCoordinator: NSObject {
         tearDownViewportCoordination(resetViewport: true)
     }
 
+    /// Refreshes viewport state after the host view controller appears.
     public func handleViewDidAppear() {
         updateViewport()
     }
 
+    /// Refreshes viewport state after the web view moves between superviews, windows, or screens.
     public func handleWebViewHierarchyDidChange() {
         let currentScreen = webView?.window?.screen
         if let currentScreen, let lastKnownWindowScreen, lastKnownWindowScreen !== currentScreen {
@@ -484,11 +593,13 @@ public final class ViewportCoordinator: NSObject {
         updateViewport()
     }
 
+    /// Refreshes viewport state after the web view's safe area insets change.
     public func handleWebViewSafeAreaInsetsDidChange() {
         lastAppliedViewportState = nil
         updateViewport()
     }
 
+    /// Recomputes and applies the current viewport state.
     public func updateViewport() {
         guard let webView else {
             return
@@ -584,6 +695,7 @@ public final class ViewportCoordinator: NSObject {
         }
     }
 
+    /// Stops observation and resets the viewport state applied to the web view.
     public func invalidate() {
         tearDownViewportCoordination(resetViewport: true)
     }
