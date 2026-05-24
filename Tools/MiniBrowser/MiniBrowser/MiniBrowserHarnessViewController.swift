@@ -353,21 +353,6 @@ final class MiniBrowserHarnessState {
     }
 
     @discardableResult
-    func focusBottomInputAndRefreshPageMetrics(afterViewportHeightChangeFrom previousViewportHeight: Int) async throws -> PageMetrics {
-        guard fixtureLoaded else {
-            setPageMetricsLoading()
-            throw PageMetricsError.fixtureNotLoaded
-        }
-
-        let rawJSON = try await callAsyncJavaScriptString(
-            "return window.testHarness.focusInputAndCapture('bottom-input', \(previousViewportHeight));"
-        )
-        let metrics = try decodePageMetrics(from: rawJSON)
-        pageMetrics = metrics
-        return metrics
-    }
-
-    @discardableResult
     func scrollBottomInputIntoViewAndRefreshPageMetrics() async throws -> PageMetrics {
         guard fixtureLoaded else {
             setPageMetricsLoading()
@@ -898,14 +883,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
                 return
             }
             do {
-                let baselinePage = try await state.refreshPageMetrics()
-                if #available(iOS 26.0, *) {
-                    try await state.focusBottomInputAndRefreshPageMetrics(
-                        afterViewportHeightChangeFrom: baselinePage.viewportHeight
-                    )
-                } else {
-                    try await state.focusBottomInputForSelfTest()
-                }
+                try await state.focusBottomInputForSelfTest()
                 flushLayout()
                 try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
                 state.captureNativeMetrics(in: self)
@@ -1237,16 +1215,9 @@ private extension MiniBrowserHarnessViewController {
     ) {
         let keyboardObserver = KeyboardFrameObserver()
         let inputSessionBaseline = state.selfTestInputSessionStartCount
-        let resizedPage: PageMetrics
-        if #available(iOS 26.0, *) {
-            resizedPage = try await state.focusBottomInputAndRefreshPageMetrics(
-                afterViewportHeightChangeFrom: baselinePage.viewportHeight
-            )
-        } else {
-            try await state.focusBottomInputForSelfTest()
-            await keyboardObserver.nextFrame()
-            resizedPage = try await state.refreshPageMetrics()
-        }
+        try await state.focusBottomInputForSelfTest()
+        await keyboardObserver.nextFrame()
+        let resizedPage = try await state.refreshPageMetrics()
         flushLayout()
         let page = try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
         let native = state.captureNativeMetrics(in: self)

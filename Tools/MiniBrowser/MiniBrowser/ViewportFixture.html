@@ -176,54 +176,6 @@
             });
         };
 
-        const focusInputAndBuildStateAfterViewportChange = (identifier, previousViewportHeight) => {
-            const input = document.getElementById(identifier);
-            if (!input) {
-                return buildErrorState(`missing-input:${identifier}`);
-            }
-
-            const visualViewport = window.visualViewport;
-            if (!visualViewport || viewportHeight() !== previousViewportHeight) {
-                if (!focusInput(identifier)) {
-                    return buildErrorState(`focus-failed:${identifier}`);
-                }
-                return buildState();
-            }
-
-            return new Promise((resolve) => {
-                let isResolved = false;
-                const finish = () => {
-                    if (isResolved) {
-                        return;
-                    }
-                    isResolved = true;
-                    visualViewport.removeEventListener("resize", handleResize);
-                    resolve(buildState());
-                };
-                const fail = () => {
-                    if (isResolved) {
-                        return;
-                    }
-                    isResolved = true;
-                    visualViewport.removeEventListener("resize", handleResize);
-                    resolve(buildErrorState(`focus-failed:${identifier}`));
-                };
-                const handleResize = () => {
-                    if (viewportHeight() === previousViewportHeight) {
-                        return;
-                    }
-                    finish();
-                };
-
-                visualViewport.addEventListener("resize", handleResize);
-                if (!focusInput(identifier)) {
-                    fail();
-                    return;
-                }
-                handleResize();
-            });
-        };
-
         window.testHarness = {
             captureState() {
                 return withErrorState(buildState);
@@ -233,9 +185,6 @@
             },
             focusInput(identifier) {
                 return withErrorState(() => JSON.stringify({ status: focusInput(identifier) ? "ready" : "error" }));
-            },
-            focusInputAndCapture(identifier, previousViewportHeight) {
-                return withErrorState(() => focusInputAndBuildStateAfterViewportChange(identifier, previousViewportHeight));
             },
             scrollInputIntoViewAndCapture(identifier) {
                 return withErrorState(() => {
