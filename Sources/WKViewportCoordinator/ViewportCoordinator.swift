@@ -188,12 +188,7 @@ struct ResolvedViewportMetrics: Equatable {
         if contentInsetAdjustmentBehavior == .never {
             safeAreaInsetContribution = .zero
         } else {
-            safeAreaInsetContribution = UIEdgeInsets(
-                top: obscuredContentInsetEdgesAffectedBySafeArea.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
-                left: obscuredContentInsetEdgesAffectedBySafeArea.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
-                bottom: obscuredContentInsetEdgesAffectedBySafeArea.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
-                right: obscuredContentInsetEdgesAffectedBySafeArea.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
-            )
+            safeAreaInsetContribution = legacyFallbackSafeAreaInsets
         }
         self.contentScrollInsetFallback = UIEdgeInsets(
             top: max(0, scrollFallbackObscuredInsets.top - safeAreaInsetContribution.top),
@@ -221,12 +216,7 @@ struct ResolvedViewportMetrics: Equatable {
             return .zero
         }
 
-        return UIEdgeInsets(
-            top: obscuredContentInsetEdgesAffectedBySafeArea.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
-            left: obscuredContentInsetEdgesAffectedBySafeArea.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
-            bottom: obscuredContentInsetEdgesAffectedBySafeArea.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
-            right: obscuredContentInsetEdgesAffectedBySafeArea.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
-        )
+        return legacyFallbackSafeAreaInsets
     }
 }
 

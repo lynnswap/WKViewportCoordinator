@@ -47,15 +47,46 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
         assertFixedBottomWithinViewport(chromeVisiblePage, context: "navigation bar visible")
 
+        postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
+        let excludedTopSafeAreaNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.scenario == HarnessCommand.Scenario.excludeTopSafeArea.rawValue
+                    && $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.revision > chromeVisibleNative.revision
+            }
+        )
+        let excludedTopSafeAreaPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        XCTAssertLessThanOrEqual(
+            abs(excludedTopSafeAreaNative.effectiveTop - chromeVisibleNative.effectiveTop),
+            1,
+            "excludeTopSafeArea should not add top viewport spacing: visible=\(chromeVisibleNative.effectiveTop), excluded=\(excludedTopSafeAreaNative.effectiveTop)"
+        )
+        XCTAssertLessThanOrEqual(
+            abs(excludedTopSafeAreaPage.topMarkerTop - chromeVisiblePage.topMarkerTop),
+            2,
+            "excludeTopSafeArea should keep top page geometry stable: visible=\(chromeVisiblePage.topMarkerTop), excluded=\(excludedTopSafeAreaPage.topMarkerTop)"
+        )
+
+        postCommand(.setScenario(.standard), sessionID: commandSessionID)
+        let restoredStandardNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.scenario == HarnessCommand.Scenario.standard.rawValue
+                    && $0.revision > excludedTopSafeAreaNative.revision
+            }
+        )
+        let restoredStandardPage = try pageMetrics(in: app, matching: { $0.revision > excludedTopSafeAreaPage.revision })
+
         postCommand(.setChromeMode(.navigationBarHidden), sessionID: commandSessionID)
         let chromeHiddenNative = try nativeMetrics(
             in: app,
             matching: {
                 $0.chromeMode == HarnessCommand.ChromeMode.navigationBarHidden.rawValue
-                    && $0.revision > chromeVisibleNative.revision
-            }
+                    && $0.revision > restoredStandardNative.revision
+                }
         )
-        let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > restoredStandardPage.revision })
         if #available(iOS 26.0, *) {
             XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
             XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)

@@ -1355,7 +1355,7 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
-    func resolvedMetricsSubtractSafeAreaOnlyForAffectedEdgesInFallback() {
+    func resolvedMetricsSubtractSafeAreaFallbackIndependentOfAffectedEdges() {
         let resolvedMetrics = ResolvedViewportMetrics(
             state: ViewportMetrics(
                 safeArea: .init(
@@ -1374,8 +1374,34 @@ struct ViewportCoordinatorTests {
         )
 
         #expect(
-            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 103, left: 0, bottom: 54, right: 0)
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
         )
+        #expect(resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea == [.bottom])
+    }
+
+    @Test
+    func resolvedMetricsKeepSafeAreaFallbackWhenAdjustmentIsNeverEvenWithExcludedAffectedEdges() {
+        let resolvedMetrics = ResolvedViewportMetrics(
+            state: ViewportMetrics(
+                safeArea: .init(
+                    viewport: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                    legacyFallbackBaseline: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+                ),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomBarObscurationBehavior: .includeWhenKeyboardOverlaps,
+                obscuredContentInsetEdgesAffectedBySafeArea: [.bottom]
+            ),
+            contentInsetAdjustmentBehavior: .never,
+            screenScale: 3
+        )
+
+        #expect(
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 103, left: 0, bottom: 88, right: 0)
+        )
+        #expect(resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea == [.bottom])
     }
 
     @Test
@@ -1519,7 +1545,8 @@ struct ViewportCoordinatorTests {
                 bottomObscuredHeight: 88,
                 keyboardOverlapHeight: 0,
                 inputAccessoryOverlapHeight: 0,
-                bottomBarObscurationBehavior: .includeWhenKeyboardOverlaps
+                bottomBarObscurationBehavior: .includeWhenKeyboardOverlaps,
+                obscuredContentInsetEdgesAffectedBySafeArea: [.bottom]
             ),
             contentInsetAdjustmentBehavior: .always,
             screenScale: 3
@@ -1532,12 +1559,12 @@ struct ViewportCoordinatorTests {
                 webView: object
             )
         )
-        #expect(object.contentScrollInsetCalls == [resolvedMetrics.contentScrollInsetFallback])
+        #expect(object.contentScrollInsetCalls == [UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)])
         #expect(object.obscuredInsetCalls == [resolvedMetrics.obscuredInsets])
         #expect(
             object.unobscuredSafeAreaInsetsCalls == [resolvedMetrics.unobscuredSafeAreaInsets]
         )
-        #expect(object.obscuredSafeAreaEdgeCalls == [resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea.rawValue])
+        #expect(object.obscuredSafeAreaEdgeCalls == [UIRectEdge.bottom.rawValue])
         #expect(
             object.layoutOverrideCalls == [
                 .init(
