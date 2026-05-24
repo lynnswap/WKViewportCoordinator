@@ -3,87 +3,73 @@ import Combine
 import UIKit
 import WebKit
 
-/// Controls how bottom chrome contributes to the final obscured viewport inset.
-public enum BottomChromeMode: Equatable {
-    /// Includes bottom chrome, such as a tab bar or toolbar, in the bottom obscured height.
-    case normal
+/// Controls how bottom bars contribute to the final obscured viewport inset.
+public enum ViewportBottomBarObscurationBehavior: Equatable {
+    /// Includes bottom bars while keyboard or input accessory overlap is active.
+    case includeWhenKeyboardOverlaps
 
-    /// Ignores bottom chrome while keyboard or input accessory overlap is active.
-    case hiddenForKeyboard
+    /// Ignores bottom bars while keyboard or input accessory overlap is active.
+    case ignoreWhenKeyboardOrAccessoryOverlaps
 }
 
-/// Describes the scroll edge effect style applied to a managed web view.
-public enum ScrollEdgeEffectStyle: Equatable {
-    /// Uses UIKit's automatic edge effect style.
-    case automatic
+/// Scroll edge effects applied to a coordinated web view's scroll view.
+public struct ViewportScrollEdgeEffects: Equatable {
+    /// The top scroll edge effect.
+    public var top: ViewportScrollEdgeEffect
 
-    /// Uses a hard edge effect style.
-    case hard
+    /// The bottom scroll edge effect.
+    public var bottom: ViewportScrollEdgeEffect
 
-    /// Uses a soft edge effect style.
-    case soft
-}
-
-/// Configuration values used when applying viewport metrics to a `WKWebView`.
-public struct ViewportConfiguration: Equatable {
-    /// The content inset adjustment behavior assigned to the web view's scroll view.
-    public var contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
-
-    /// A Boolean value indicating whether the top scroll edge effect is hidden.
-    public var topEdgeEffectHidden: Bool
-
-    /// A Boolean value indicating whether the bottom scroll edge effect is hidden.
-    public var bottomEdgeEffectHidden: Bool
-
-    /// The style applied to the top scroll edge effect.
-    public var topEdgeEffectStyle: ScrollEdgeEffectStyle
-
-    /// The style applied to the bottom scroll edge effect.
-    public var bottomEdgeEffectStyle: ScrollEdgeEffectStyle
-
-    /// The safe area edges that should affect obscured inset calculations.
-    public var safeAreaAffectedEdges: UIRectEdge
-
-    /// Creates a viewport configuration.
+    /// Creates scroll edge effects.
     ///
     /// - Parameters:
-    ///   - contentInsetAdjustmentBehavior: The content inset adjustment behavior for the web view's scroll view.
-    ///   - topEdgeEffectHidden: Whether the top scroll edge effect should be hidden.
-    ///   - bottomEdgeEffectHidden: Whether the bottom scroll edge effect should be hidden.
-    ///   - topEdgeEffectStyle: The style for the top scroll edge effect.
-    ///   - bottomEdgeEffectStyle: The style for the bottom scroll edge effect.
-    ///   - safeAreaAffectedEdges: The safe area edges that should affect obscured inset calculations.
+    ///   - top: The top scroll edge effect.
+    ///   - bottom: The bottom scroll edge effect.
     public init(
-        contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior = .always,
-        topEdgeEffectHidden: Bool = false,
-        bottomEdgeEffectHidden: Bool = false,
-        topEdgeEffectStyle: ScrollEdgeEffectStyle = .soft,
-        bottomEdgeEffectStyle: ScrollEdgeEffectStyle = .soft,
-        safeAreaAffectedEdges: UIRectEdge = [.top, .bottom]
+        top: ViewportScrollEdgeEffect = ViewportScrollEdgeEffect(),
+        bottom: ViewportScrollEdgeEffect = ViewportScrollEdgeEffect()
     ) {
-        self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
-        self.topEdgeEffectHidden = topEdgeEffectHidden
-        self.bottomEdgeEffectHidden = bottomEdgeEffectHidden
-        self.topEdgeEffectStyle = topEdgeEffectStyle
-        self.bottomEdgeEffectStyle = bottomEdgeEffectStyle
-        self.safeAreaAffectedEdges = safeAreaAffectedEdges
+        self.top = top
+        self.bottom = bottom
     }
 }
 
-/// Safe area values used to calculate viewport and fallback scroll metrics.
-public struct ViewportSafeAreaMetrics: Equatable {
-    /// The safe area projected from the host window into the web view's host coordinate space.
-    public var viewport: UIEdgeInsets
+/// A scroll edge effect applied to one edge of a coordinated web view's scroll view.
+public struct ViewportScrollEdgeEffect: Equatable {
+    /// Describes the scroll edge effect style.
+    public enum Style: Equatable {
+        /// Uses UIKit's automatic edge effect style.
+        case automatic
 
-    /// The host view's safe area baseline used by the legacy fallback path.
-    public var legacyFallbackBaseline: UIEdgeInsets
+        /// Uses a hard edge effect style.
+        case hard
 
-    /// Creates safe area metrics for viewport coordination.
+        /// Uses a soft edge effect style.
+        case soft
+    }
+
+    /// A Boolean value indicating whether the edge effect is hidden.
+    public var isHidden: Bool
+
+    /// The style applied to the edge effect.
+    public var style: Style
+
+    /// Creates a scroll edge effect.
     ///
     /// - Parameters:
-    ///   - viewport: The projected viewport safe area.
-    ///   - legacyFallbackBaseline: The baseline safe area used by the legacy fallback path.
-    public init(
+    ///   - isHidden: Whether the edge effect should be hidden.
+    ///   - style: The style applied to the edge effect.
+    public init(isHidden: Bool = false, style: Style = .soft) {
+        self.isHidden = isHidden
+        self.style = style
+    }
+}
+
+struct ViewportSafeAreaMetrics: Equatable {
+    var viewport: UIEdgeInsets
+    var legacyFallbackBaseline: UIEdgeInsets
+
+    init(
         viewport: UIEdgeInsets,
         legacyFallbackBaseline: UIEdgeInsets
     ) {
@@ -92,70 +78,83 @@ public struct ViewportSafeAreaMetrics: Equatable {
     }
 }
 
-/// A snapshot of the viewport state that should be applied to a `WKWebView`.
-public struct ViewportMetrics: Equatable {
-    /// The safe area values used for viewport and legacy fallback calculations.
-    public var safeArea: ViewportSafeAreaMetrics
+struct ViewportMetrics: Equatable {
+    var safeArea: ViewportSafeAreaMetrics
+    var topObscuredHeight: CGFloat
+    var bottomObscuredHeight: CGFloat
+    var keyboardOverlapHeight: CGFloat
+    var inputAccessoryOverlapHeight: CGFloat
+    var bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior
+    var additionalObscuredContentInsets: UIEdgeInsets
+    var obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge
 
-    /// The height obscured from the top edge by safe area and visible chrome.
-    public var topObscuredHeight: CGFloat
-
-    /// The height obscured from the bottom edge by visible chrome.
-    public var bottomObscuredHeight: CGFloat
-
-    /// The height of the keyboard overlap inside the metrics host view.
-    public var keyboardOverlapHeight: CGFloat
-
-    /// The height of the input accessory overlap inside the metrics host view.
-    public var inputAccessoryOverlapHeight: CGFloat
-
-    /// The mode used when combining bottom chrome with keyboard and accessory overlap.
-    public var bottomChromeMode: BottomChromeMode
-
-    /// The safe area edges that should affect obscured inset calculations.
-    public var safeAreaAffectedEdges: UIRectEdge
-
-    /// Creates viewport metrics.
-    ///
-    /// - Parameters:
-    ///   - safeArea: The safe area values used for viewport and fallback calculations.
-    ///   - topObscuredHeight: The height obscured from the top edge.
-    ///   - bottomObscuredHeight: The height obscured from the bottom edge by visible chrome.
-    ///   - keyboardOverlapHeight: The height overlapped by the keyboard.
-    ///   - inputAccessoryOverlapHeight: The height overlapped by the input accessory view.
-    ///   - bottomChromeMode: The mode used when combining bottom chrome with keyboard and accessory overlap.
-    ///   - safeAreaAffectedEdges: The safe area edges that should affect obscured inset calculations.
-    public init(
+    init(
         safeArea: ViewportSafeAreaMetrics,
         topObscuredHeight: CGFloat,
         bottomObscuredHeight: CGFloat,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat,
-        bottomChromeMode: BottomChromeMode,
-        safeAreaAffectedEdges: UIRectEdge = [.top, .bottom]
+        bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior = .includeWhenKeyboardOverlaps,
+        additionalObscuredContentInsets: UIEdgeInsets = .zero,
+        obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom]
     ) {
         self.safeArea = safeArea
         self.topObscuredHeight = topObscuredHeight
         self.bottomObscuredHeight = bottomObscuredHeight
         self.keyboardOverlapHeight = keyboardOverlapHeight
         self.inputAccessoryOverlapHeight = inputAccessoryOverlapHeight
-        self.bottomChromeMode = bottomChromeMode
-        self.safeAreaAffectedEdges = safeAreaAffectedEdges
+        self.bottomBarObscurationBehavior = bottomBarObscurationBehavior
+        self.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
+        self.obscuredContentInsetEdgesAffectedBySafeArea = obscuredContentInsetEdgesAffectedBySafeArea
     }
 
-    /// The obscured insets produced by combining chrome, keyboard, and input accessory overlap.
-    public var finalObscuredInsets: UIEdgeInsets {
+    var finalObscuredInsets: UIEdgeInsets {
         UIEdgeInsets(
-            top: max(0, topObscuredHeight),
-            left: 0,
+            top: max(0, topObscuredHeight) + additionalObscuredContentInsets.top,
+            left: additionalObscuredContentInsets.left,
             bottom: resolvedBottomObscuredHeight,
-            right: 0
+            right: additionalObscuredContentInsets.right
+        )
+    }
+
+    var scrollFallbackObscuredInsets: UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, topObscuredHeight) + additionalObscuredContentInsets.top,
+            left: additionalObscuredContentInsets.left,
+            bottom: resolvedBottomScrollFallbackHeight,
+            right: additionalObscuredContentInsets.right
         )
     }
 
     private var resolvedBottomObscuredHeight: CGFloat {
-        let overlayHeight = bottomChromeMode == .normal ? bottomObscuredHeight : 0
-        return max(0, overlayHeight, keyboardOverlapHeight, inputAccessoryOverlapHeight)
+        let chromeHeight = resolvedBottomChromeHeight
+        let keyboardHeight = max(0, keyboardOverlapHeight)
+        let accessoryHeight = max(0, inputAccessoryOverlapHeight)
+        switch bottomBarObscurationBehavior {
+        case .includeWhenKeyboardOverlaps:
+            return max(0, chromeHeight, keyboardHeight, accessoryHeight)
+        case .ignoreWhenKeyboardOrAccessoryOverlaps:
+            if keyboardHeight > 0 || accessoryHeight > 0 {
+                return max(keyboardHeight, accessoryHeight)
+            }
+            return chromeHeight
+        }
+    }
+
+    private var resolvedBottomChromeHeight: CGFloat {
+        max(0, bottomObscuredHeight) + additionalObscuredContentInsets.bottom
+    }
+
+    private var resolvedBottomScrollFallbackHeight: CGFloat {
+        switch bottomBarObscurationBehavior {
+        case .includeWhenKeyboardOverlaps:
+            return resolvedBottomChromeHeight
+        case .ignoreWhenKeyboardOrAccessoryOverlaps:
+            if max(0, keyboardOverlapHeight) > 0 || max(0, inputAccessoryOverlapHeight) > 0 {
+                return 0
+            }
+            return resolvedBottomChromeHeight
+        }
     }
 }
 
@@ -164,7 +163,7 @@ struct ResolvedViewportMetrics: Equatable {
     let legacyFallbackSafeAreaInsets: UIEdgeInsets
     let obscuredInsets: UIEdgeInsets
     let unobscuredSafeAreaInsets: UIEdgeInsets
-    let safeAreaAffectedEdges: UIRectEdge
+    let obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge
     let contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
     let contentScrollInsetFallback: UIEdgeInsets
 
@@ -176,29 +175,24 @@ struct ResolvedViewportMetrics: Equatable {
         viewportSafeAreaInsets = state.safeArea.viewport.wk_roundedToPixel(screenScale)
         legacyFallbackSafeAreaInsets = state.safeArea.legacyFallbackBaseline.wk_roundedToPixel(screenScale)
         obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
-        let scrollFallbackObscuredInsets = UIEdgeInsets(
-            top: max(0, state.topObscuredHeight),
-            left: 0,
-            bottom: max(0, state.bottomChromeMode == .normal ? state.bottomObscuredHeight : 0),
-            right: 0
-        ).wk_roundedToPixel(screenScale)
+        let scrollFallbackObscuredInsets = state.scrollFallbackObscuredInsets.wk_roundedToPixel(screenScale)
         unobscuredSafeAreaInsets = UIEdgeInsets(
             top: max(0, viewportSafeAreaInsets.top - obscuredInsets.top),
             left: max(0, viewportSafeAreaInsets.left - obscuredInsets.left),
             bottom: max(0, viewportSafeAreaInsets.bottom - obscuredInsets.bottom),
             right: max(0, viewportSafeAreaInsets.right - obscuredInsets.right)
         )
-        safeAreaAffectedEdges = state.safeAreaAffectedEdges
+        obscuredContentInsetEdgesAffectedBySafeArea = state.obscuredContentInsetEdgesAffectedBySafeArea
         self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
         let safeAreaInsetContribution: UIEdgeInsets
         if contentInsetAdjustmentBehavior == .never {
             safeAreaInsetContribution = .zero
         } else {
             safeAreaInsetContribution = UIEdgeInsets(
-                top: safeAreaAffectedEdges.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
-                left: safeAreaAffectedEdges.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
-                bottom: safeAreaAffectedEdges.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
-                right: safeAreaAffectedEdges.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
+                top: obscuredContentInsetEdgesAffectedBySafeArea.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
+                left: obscuredContentInsetEdgesAffectedBySafeArea.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
+                bottom: obscuredContentInsetEdgesAffectedBySafeArea.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
+                right: obscuredContentInsetEdgesAffectedBySafeArea.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
             )
         }
         self.contentScrollInsetFallback = UIEdgeInsets(
@@ -228,10 +222,10 @@ struct ResolvedViewportMetrics: Equatable {
         }
 
         return UIEdgeInsets(
-            top: safeAreaAffectedEdges.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
-            left: safeAreaAffectedEdges.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
-            bottom: safeAreaAffectedEdges.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
-            right: safeAreaAffectedEdges.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
+            top: obscuredContentInsetEdgesAffectedBySafeArea.contains(.top) ? legacyFallbackSafeAreaInsets.top : 0,
+            left: obscuredContentInsetEdgesAffectedBySafeArea.contains(.left) ? legacyFallbackSafeAreaInsets.left : 0,
+            bottom: obscuredContentInsetEdgesAffectedBySafeArea.contains(.bottom) ? legacyFallbackSafeAreaInsets.bottom : 0,
+            right: obscuredContentInsetEdgesAffectedBySafeArea.contains(.right) ? legacyFallbackSafeAreaInsets.right : 0
         )
     }
 }
@@ -252,44 +246,14 @@ struct AppliedViewportState: Equatable {
 
         return lhs.resolvedMetrics.obscuredInsets == rhs.resolvedMetrics.obscuredInsets
             && lhs.resolvedMetrics.unobscuredSafeAreaInsets == rhs.resolvedMetrics.unobscuredSafeAreaInsets
-            && lhs.resolvedMetrics.safeAreaAffectedEdges == rhs.resolvedMetrics.safeAreaAffectedEdges
+            && lhs.resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea
+                == rhs.resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea
     }
 }
 
-/// A type that measures the viewport state for a host view controller and web view.
 @MainActor
-public protocol ViewportMetricsSource {
-    /// Returns viewport metrics for the current host, web view, keyboard, and input accessory state.
-    ///
-    /// - Parameters:
-    ///   - hostViewController: The view controller that hosts the web view.
-    ///   - webView: The web view whose viewport is being coordinated.
-    ///   - keyboardOverlapHeight: The keyboard overlap height measured in the metrics host view.
-    ///   - inputAccessoryOverlapHeight: The input accessory overlap height measured in the metrics host view.
-    /// - Returns: Metrics that describe the viewport state to apply to the web view.
+final class ViewportMetricsResolver {
     func makeViewportMetrics(
-        in hostViewController: UIViewController,
-        webView: WKWebView,
-        keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat
-    ) -> ViewportMetrics
-}
-
-/// Default metrics provider for UIKit-hosted `WKWebView` viewport coordination.
-@MainActor
-public final class ViewportMetricsProvider: ViewportMetricsSource {
-    /// Creates the default metrics provider.
-    public init() {}
-
-    /// Measures safe area, visible navigation chrome, tab bar, toolbar, keyboard, and input accessory overlap.
-    ///
-    /// - Parameters:
-    ///   - hostViewController: The view controller that hosts the web view.
-    ///   - webView: The web view whose viewport is being coordinated.
-    ///   - keyboardOverlapHeight: The keyboard overlap height measured by the coordinator.
-    ///   - inputAccessoryOverlapHeight: The input accessory overlap height measured by the coordinator.
-    /// - Returns: Metrics suitable for the coordinator's default viewport update path.
-    public func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
@@ -322,8 +286,7 @@ public final class ViewportMetricsProvider: ViewportMetricsSource {
             topObscuredHeight: topObscuredHeight,
             bottomObscuredHeight: bottomObscuredHeight,
             keyboardOverlapHeight: keyboardOverlapHeight,
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
-            bottomChromeMode: .normal
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight
         )
     }
 
@@ -474,21 +437,42 @@ public final class ViewportCoordinator: NSObject {
     /// The web view whose viewport is coordinated.
     public weak var webView: WKWebView?
 
-    /// The configuration applied during viewport updates.
-    public var configuration: ViewportConfiguration {
+    /// The safe area edges that should affect obscured content inset calculations.
+    public var obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom] {
         didSet {
             updateViewport()
         }
     }
 
-    /// The object that produces viewport metrics for each update.
-    public var metricsProvider: any ViewportMetricsSource {
-        didSet {
-            lastAppliedViewportState = nil
+    /// Additional obscured content insets contributed by client-managed UI.
+    ///
+    /// Negative values are treated as zero.
+    public var additionalObscuredContentInsets: UIEdgeInsets {
+        get {
+            storedAdditionalObscuredContentInsets
+        }
+        set {
+            storedAdditionalObscuredContentInsets = newValue.wk_clampedNonNegative
             updateViewport()
         }
     }
 
+    /// The behavior used when combining bottom bars with keyboard and input accessory overlap.
+    public var bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior = .includeWhenKeyboardOverlaps {
+        didSet {
+            updateViewport()
+        }
+    }
+
+    /// The scroll edge effects applied to the web view's scroll view.
+    public var scrollEdgeEffects = ViewportScrollEdgeEffects() {
+        didSet {
+            updateViewport()
+        }
+    }
+
+    private let metricsResolver = ViewportMetricsResolver()
+    private var storedAdditionalObscuredContentInsets: UIEdgeInsets = .zero
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedViewportState: AppliedViewportState?
     private var observationView: ViewportObservationView?
@@ -535,18 +519,12 @@ public final class ViewportCoordinator: NSObject {
     /// - Parameters:
     ///   - hostViewController: The view controller that hosts the web view. Pass `nil` to resolve it automatically.
     ///   - webView: The web view whose viewport should be coordinated.
-    ///   - configuration: The configuration used when applying viewport updates.
-    ///   - metricsProvider: The object that produces viewport metrics.
     public init(
         hostViewController: UIViewController? = nil,
-        webView: WKWebView,
-        configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsSource = ViewportMetricsProvider()
+        webView: WKWebView
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
-        self.configuration = configuration
-        self.metricsProvider = metricsProvider
         super.init()
         observeKeyboardNotifications()
         observeWebViewStateIfPossible()
@@ -555,20 +533,11 @@ public final class ViewportCoordinator: NSObject {
 
     /// Creates a viewport coordinator that resolves its host view controller automatically.
     ///
-    /// - Parameters:
-    ///   - webView: The web view whose viewport should be coordinated.
-    ///   - configuration: The configuration used when applying viewport updates.
-    ///   - metricsProvider: The object that produces viewport metrics.
-    public convenience init(
-        webView: WKWebView,
-        configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsSource = ViewportMetricsProvider()
-    ) {
+    /// - Parameter webView: The web view whose viewport should be coordinated.
+    public convenience init(webView: WKWebView) {
         self.init(
             hostViewController: nil,
-            webView: webView,
-            configuration: configuration,
-            metricsProvider: metricsProvider
+            webView: webView
         )
     }
 
@@ -577,12 +546,12 @@ public final class ViewportCoordinator: NSObject {
     }
 
     /// Refreshes viewport state after the host view controller appears.
-    public func handleViewDidAppear() {
+    public func hostViewDidAppear() {
         updateViewport()
     }
 
     /// Refreshes viewport state after the web view moves between superviews, windows, or screens.
-    public func handleWebViewHierarchyDidChange() {
+    public func webViewHierarchyDidChange() {
         let currentScreen = webView?.window?.screen
         if let currentScreen, let lastKnownWindowScreen, lastKnownWindowScreen !== currentScreen {
             keyboardFrameInScreen = .null
@@ -594,7 +563,7 @@ public final class ViewportCoordinator: NSObject {
     }
 
     /// Refreshes viewport state after the web view's safe area insets change.
-    public func handleWebViewSafeAreaInsetsDidChange() {
+    public func webViewSafeAreaInsetsDidChange() {
         lastAppliedViewportState = nil
         updateViewport()
     }
@@ -633,17 +602,19 @@ public final class ViewportCoordinator: NSObject {
         installObservationViewIfPossible(in: observationContainerView)
         updateObservedHostViewControllerIfNeeded(hostViewController, webView: webView)
 
-        applyScrollViewConfiguration(to: webView.scrollView)
+        applyScrollEdgeEffects(to: webView.scrollView)
         hostViewController.setContentScrollView(webView.scrollView)
 
         let metricsHostView = resolvedMetricsHostView(webView: webView, hostViewController: hostViewController)
-        var effectiveMetrics = metricsProvider.makeViewportMetrics(
+        var effectiveMetrics = metricsResolver.makeViewportMetrics(
             in: hostViewController,
             webView: webView,
             keyboardOverlapHeight: keyboardOverlapHeight(in: metricsHostView),
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: metricsHostView)
         )
-        effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
+        effectiveMetrics.obscuredContentInsetEdgesAffectedBySafeArea = obscuredContentInsetEdgesAffectedBySafeArea
+        effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
+        effectiveMetrics.bottomBarObscurationBehavior = bottomBarObscurationBehavior
 
         let screenScale = observationContainerView.window?.screen.scale
             ?? webView.window?.screen.scale
@@ -651,7 +622,7 @@ public final class ViewportCoordinator: NSObject {
         lastKnownWindowScreen = observationContainerView.window?.screen ?? webView.window?.screen
         let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
-            contentInsetAdjustmentBehavior: configuration.contentInsetAdjustmentBehavior,
+            contentInsetAdjustmentBehavior: webView.scrollView.contentInsetAdjustmentBehavior,
             screenScale: screenScale
         )
         let contentScrollInsetFallback: UIEdgeInsets?
@@ -683,7 +654,7 @@ public final class ViewportCoordinator: NSObject {
                 to: webView
             )
             ViewportSPIBridge.apply(
-                obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges,
+                obscuredSafeAreaEdges: resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea,
                 to: webView
             )
         } else {
@@ -718,16 +689,12 @@ public final class ViewportCoordinator: NSObject {
         lastKnownWindowScreen = nil
     }
 
-    private func applyScrollViewConfiguration(to scrollView: UIScrollView) {
-        if scrollView.contentInsetAdjustmentBehavior != configuration.contentInsetAdjustmentBehavior {
-            scrollView.contentInsetAdjustmentBehavior = configuration.contentInsetAdjustmentBehavior
-        }
-
+    private func applyScrollEdgeEffects(to scrollView: UIScrollView) {
         if #available(iOS 26.0, *) {
-            scrollView.topEdgeEffect.isHidden = configuration.topEdgeEffectHidden
-            scrollView.topEdgeEffect.style = configuration.topEdgeEffectStyle.uiKitStyle
-            scrollView.bottomEdgeEffect.isHidden = configuration.bottomEdgeEffectHidden
-            scrollView.bottomEdgeEffect.style = configuration.bottomEdgeEffectStyle.uiKitStyle
+            scrollView.topEdgeEffect.isHidden = scrollEdgeEffects.top.isHidden
+            scrollView.topEdgeEffect.style = scrollEdgeEffects.top.style.uiKitStyle
+            scrollView.bottomEdgeEffect.isHidden = scrollEdgeEffects.bottom.isHidden
+            scrollView.bottomEdgeEffect.style = scrollEdgeEffects.bottom.style.uiKitStyle
         }
     }
 
@@ -878,6 +845,13 @@ public final class ViewportCoordinator: NSObject {
                 self?.handleObservedWebViewStateChange()
             }
             .store(in: &webViewStateCancellables)
+
+        webView.scrollView.publisher(for: \.contentInsetAdjustmentBehavior, options: [.new])
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleObservedWebViewStateChange()
+            }
+            .store(in: &webViewStateCancellables)
     }
 
     private func handleObservedWebViewStateChange() {
@@ -1011,6 +985,17 @@ private final class ViewportObservationView: UIView {
     }
 }
 
+extension UIEdgeInsets {
+    var wk_clampedNonNegative: UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, top),
+            left: max(0, left),
+            bottom: max(0, bottom),
+            right: max(0, right)
+        )
+    }
+}
+
 private extension UIEdgeInsets {
     func wk_adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
         UIEdgeInsets(
@@ -1050,7 +1035,7 @@ private extension UIEdgeInsets {
 
 @MainActor
 @available(iOS 26.0, *)
-private extension ScrollEdgeEffectStyle {
+private extension ViewportScrollEdgeEffect.Style {
     var uiKitStyle: UIScrollEdgeEffect.Style {
         switch self {
         case .automatic:

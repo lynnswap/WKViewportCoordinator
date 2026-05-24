@@ -15,21 +15,45 @@ public final class ManagedViewportWebView: WKWebView {
         }
     }
 
-    /// The configuration used by the embedded viewport coordinator.
-    public var viewportConfiguration = ViewportConfiguration() {
+    /// The safe area edges that should affect obscured content inset calculations.
+    public var viewportObscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom] {
         didSet {
-            viewportCoordinator?.configuration = viewportConfiguration
+            viewportCoordinator?.obscuredContentInsetEdgesAffectedBySafeArea =
+                viewportObscuredContentInsetEdgesAffectedBySafeArea
         }
     }
 
-    /// The metrics provider used by the embedded viewport coordinator.
-    public var viewportMetricsProvider: any ViewportMetricsSource = ViewportMetricsProvider() {
+    /// Additional obscured content insets contributed by client-managed UI.
+    ///
+    /// Negative values are treated as zero.
+    public var viewportAdditionalObscuredContentInsets: UIEdgeInsets {
+        get {
+            storedViewportAdditionalObscuredContentInsets
+        }
+        set {
+            storedViewportAdditionalObscuredContentInsets = newValue.wk_clampedNonNegative
+            viewportCoordinator?.additionalObscuredContentInsets = storedViewportAdditionalObscuredContentInsets
+        }
+    }
+
+    /// The behavior used when combining bottom bars with keyboard and input accessory overlap.
+    public var viewportBottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior =
+        .includeWhenKeyboardOverlaps
+    {
         didSet {
-            viewportCoordinator?.metricsProvider = viewportMetricsProvider
+            viewportCoordinator?.bottomBarObscurationBehavior = viewportBottomBarObscurationBehavior
+        }
+    }
+
+    /// The scroll edge effects applied to the web view's scroll view.
+    public var viewportScrollEdgeEffects = ViewportScrollEdgeEffects() {
+        didSet {
+            viewportCoordinator?.scrollEdgeEffects = viewportScrollEdgeEffects
         }
     }
 
     private var viewportCoordinator: ViewportCoordinator?
+    private var storedViewportAdditionalObscuredContentInsets: UIEdgeInsets = .zero
 
     /// Creates a managed viewport web view.
     ///
@@ -56,19 +80,19 @@ public final class ManagedViewportWebView: WKWebView {
     /// Notifies the embedded coordinator that the web view hierarchy changed.
     public override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     /// Notifies the embedded coordinator that the web view moved to a different window.
     public override func didMoveToWindow() {
         super.didMoveToWindow()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     /// Notifies the embedded coordinator that the web view safe area changed.
     public override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+        viewportCoordinator?.webViewSafeAreaInsetsDidChange()
     }
 
     var activeViewportCoordinatorForTesting: ViewportCoordinator? {
@@ -84,10 +108,13 @@ public final class ManagedViewportWebView: WKWebView {
     private func installViewportCoordinator() {
         viewportCoordinator = ViewportCoordinator(
             hostViewController: viewportHostViewController,
-            webView: self,
-            configuration: viewportConfiguration,
-            metricsProvider: viewportMetricsProvider
+            webView: self
         )
+        viewportCoordinator?.obscuredContentInsetEdgesAffectedBySafeArea =
+            viewportObscuredContentInsetEdgesAffectedBySafeArea
+        viewportCoordinator?.additionalObscuredContentInsets = storedViewportAdditionalObscuredContentInsets
+        viewportCoordinator?.bottomBarObscurationBehavior = viewportBottomBarObscurationBehavior
+        viewportCoordinator?.scrollEdgeEffects = viewportScrollEdgeEffects
     }
 }
 #endif

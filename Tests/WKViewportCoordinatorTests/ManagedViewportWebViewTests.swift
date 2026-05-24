@@ -62,7 +62,7 @@ struct ManagedViewportWebViewTests {
     }
 
     @Test
-    func managedViewportWebViewForwardsConfigurationAndMetricsProviderUpdates() throws {
+    func managedViewportWebViewForwardsViewportProxyUpdates() throws {
         let hostViewController = UIViewController()
         let navigationController = UINavigationController(rootViewController: hostViewController)
         let window = makeManagedViewportWindow(rootViewController: navigationController)
@@ -86,19 +86,38 @@ struct ManagedViewportWebViewTests {
 
         hostViewController.view.layoutIfNeeded()
 
-        let metricsProvider = ManagedViewportStaticMetricsSource()
-        webView.viewportConfiguration = ViewportConfiguration(contentInsetAdjustmentBehavior: .never)
-        webView.viewportMetricsProvider = metricsProvider
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.viewportObscuredContentInsetEdgesAffectedBySafeArea = [.bottom]
+        webView.viewportAdditionalObscuredContentInsets = UIEdgeInsets(top: -8, left: -4, bottom: 12, right: 6)
+        webView.viewportBottomBarObscurationBehavior = .ignoreWhenKeyboardOrAccessoryOverlaps
+        webView.viewportScrollEdgeEffects = ViewportScrollEdgeEffects(
+            top: ViewportScrollEdgeEffect(isHidden: true, style: .hard),
+            bottom: ViewportScrollEdgeEffect(isHidden: false, style: .automatic)
+        )
 
         let coordinator = try #require(webView.activeViewportCoordinatorForTesting)
         let resolvedMetrics = try #require(coordinator.resolvedMetricsForTesting)
 
-        #expect(coordinator.configuration.contentInsetAdjustmentBehavior == .never)
-        #expect(coordinator.metricsProvider as? ManagedViewportStaticMetricsSource === metricsProvider)
+        #expect(coordinator.obscuredContentInsetEdgesAffectedBySafeArea == [.bottom])
+        #expect(
+            coordinator.additionalObscuredContentInsets
+                == UIEdgeInsets(top: 0, left: 0, bottom: 12, right: 6)
+        )
+        #expect(webView.viewportAdditionalObscuredContentInsets == UIEdgeInsets(top: 0, left: 0, bottom: 12, right: 6))
+        #expect(coordinator.bottomBarObscurationBehavior == .ignoreWhenKeyboardOrAccessoryOverlaps)
+        #expect(
+            coordinator.scrollEdgeEffects
+                == ViewportScrollEdgeEffects(
+                    top: ViewportScrollEdgeEffect(isHidden: true, style: .hard),
+                    bottom: ViewportScrollEdgeEffect(isHidden: false, style: .automatic)
+                )
+        )
         #expect(webView.scrollView.contentInsetAdjustmentBehavior == .never)
         #expect(resolvedMetrics.contentInsetAdjustmentBehavior == .never)
-        #expect(resolvedMetrics.obscuredInsets == UIEdgeInsets(top: 21, left: 0, bottom: 34, right: 0))
-        #expect(metricsProvider.callCount > 0)
+        #expect(resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea == [.bottom])
+        #expect(resolvedMetrics.obscuredInsets.left == 0)
+        #expect(resolvedMetrics.obscuredInsets.right == 6)
+        #expect(resolvedMetrics.obscuredInsets.bottom >= 12)
     }
 }
 
@@ -111,28 +130,4 @@ private func makeManagedViewportWindow(rootViewController: UIViewController) -> 
     return window
 }
 
-@MainActor
-private final class ManagedViewportStaticMetricsSource: ViewportMetricsSource {
-    private(set) var callCount = 0
-
-    func makeViewportMetrics(
-        in hostViewController: UIViewController,
-        webView: WKWebView,
-        keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat
-    ) -> ViewportMetrics {
-        callCount += 1
-        return ViewportMetrics(
-            safeArea: .init(
-                viewport: .zero,
-                legacyFallbackBaseline: .zero
-            ),
-            topObscuredHeight: 21,
-            bottomObscuredHeight: 34,
-            keyboardOverlapHeight: keyboardOverlapHeight,
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
-            bottomChromeMode: .normal
-        )
-    }
-}
 #endif
