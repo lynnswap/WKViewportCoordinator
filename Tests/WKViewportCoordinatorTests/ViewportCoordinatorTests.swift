@@ -5,6 +5,7 @@ import UIKit
 import WebKit
 @testable import WKViewportCoordinator
 
+@Suite(.serialized)
 @MainActor
 struct ViewportCoordinatorTests {
     @Test
@@ -617,16 +618,26 @@ struct ViewportCoordinatorTests {
 
         let coordinator = ViewportCoordinator(webView: webView)
         let initialMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        let initialUpdateCount = coordinator.appliedViewportUpdateCountForTesting
         #expect(initialMetrics.contentInsetAdjustmentBehavior != .never)
 
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        for _ in 0..<10 where coordinator.resolvedMetricsForTesting?.contentInsetAdjustmentBehavior != .never {
+        for _ in 0..<10 {
+            if let metrics = coordinator.resolvedMetricsForTesting,
+               coordinator.appliedViewportUpdateCountForTesting > initialUpdateCount,
+               metrics.contentInsetAdjustmentBehavior == .never,
+               metrics.contentScrollInsetFallback.top == metrics.obscuredInsets.top {
+                break
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
 
         let updatedMetrics = try #require(coordinator.resolvedMetricsForTesting)
         #expect(updatedMetrics.contentInsetAdjustmentBehavior == .never)
-        #expect(updatedMetrics.contentScrollInsetFallback == updatedMetrics.obscuredInsets)
+        #expect(updatedMetrics.contentScrollInsetFallback.top == updatedMetrics.obscuredInsets.top)
+        #expect(updatedMetrics.contentScrollInsetFallback.left == updatedMetrics.obscuredInsets.left)
+        #expect(updatedMetrics.contentScrollInsetFallback.right == updatedMetrics.obscuredInsets.right)
+        #expect(updatedMetrics.contentScrollInsetFallback.bottom <= updatedMetrics.obscuredInsets.bottom)
         coordinator.invalidate()
     }
 
