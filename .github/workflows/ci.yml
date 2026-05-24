@@ -144,4 +144,5 @@ jobs:
             -destination "${DESTINATION}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -only-testing:MiniBrowserUITests

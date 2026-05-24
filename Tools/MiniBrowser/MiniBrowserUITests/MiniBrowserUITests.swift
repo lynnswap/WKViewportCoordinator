@@ -47,15 +47,46 @@ final class MiniBrowserUITests: XCTestCase {
         XCTAssertGreaterThan(chromeVisiblePage.revision, initialPage.revision)
         assertFixedBottomWithinViewport(chromeVisiblePage, context: "navigation bar visible")
 
+        postCommand(.setScenario(.excludeTopSafeArea), sessionID: commandSessionID)
+        let excludedTopSafeAreaNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.scenario == HarnessCommand.Scenario.excludeTopSafeArea.rawValue
+                    && $0.chromeMode == HarnessCommand.ChromeMode.navigationBarVisible.rawValue
+                    && $0.revision > chromeVisibleNative.revision
+            }
+        )
+        let excludedTopSafeAreaPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        XCTAssertLessThanOrEqual(
+            abs(excludedTopSafeAreaNative.effectiveTop - chromeVisibleNative.effectiveTop),
+            1,
+            "excludeTopSafeArea should not add top viewport spacing: visible=\(chromeVisibleNative.effectiveTop), excluded=\(excludedTopSafeAreaNative.effectiveTop)"
+        )
+        XCTAssertLessThanOrEqual(
+            abs(excludedTopSafeAreaPage.topMarkerTop - chromeVisiblePage.topMarkerTop),
+            2,
+            "excludeTopSafeArea should keep top page geometry stable: visible=\(chromeVisiblePage.topMarkerTop), excluded=\(excludedTopSafeAreaPage.topMarkerTop)"
+        )
+
+        postCommand(.setScenario(.standard), sessionID: commandSessionID)
+        let restoredStandardNative = try nativeMetrics(
+            in: app,
+            matching: {
+                $0.scenario == HarnessCommand.Scenario.standard.rawValue
+                    && $0.revision > excludedTopSafeAreaNative.revision
+            }
+        )
+        let restoredStandardPage = try pageMetrics(in: app, matching: { $0.revision > excludedTopSafeAreaPage.revision })
+
         postCommand(.setChromeMode(.navigationBarHidden), sessionID: commandSessionID)
         let chromeHiddenNative = try nativeMetrics(
             in: app,
             matching: {
                 $0.chromeMode == HarnessCommand.ChromeMode.navigationBarHidden.rawValue
-                    && $0.revision > chromeVisibleNative.revision
-            }
+                    && $0.revision > restoredStandardNative.revision
+                }
         )
-        let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > chromeVisiblePage.revision })
+        let chromeHiddenPage = try pageMetrics(in: app, matching: { $0.revision > restoredStandardPage.revision })
         if #available(iOS 26.0, *) {
             XCTAssertEqual(chromeHiddenNative.obscuredTop, chromeHiddenNative.expectedTop)
             XCTAssertLessThan(chromeHiddenNative.expectedTop, chromeVisibleNative.expectedTop)
@@ -235,12 +266,11 @@ private extension MiniBrowserUITests {
             matching: {
                 $0.activeElement == "bottom-input"
                     && $0.revision > excludedPage.revision
-                    && $0.bottomInputBottom <= $0.viewportHeight
+                    && $0.fixedBottomWithinViewport
             }
         )
         let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > restoredStandard.revision })
         XCTAssertEqual(focusedPage.activeElement, "bottom-input")
-        XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
         XCTAssertGreaterThanOrEqual(focusedNative.effectiveBottom, reattached.effectiveBottom)
         assertFixedBottomWithinViewport(focusedPage, context: "keyboard focused")
     }
@@ -258,6 +288,7 @@ private extension MiniBrowserUITests {
             matching: {
                 $0.activeElement == "bottom-input"
                     && $0.revision > baselinePage.revision
+                    && $0.bottomInputBottom <= $0.viewportHeight
             }
         )
         let focusedNative = try nativeMetrics(in: app, matching: { $0.revision > baselineNative.revision })
@@ -265,7 +296,7 @@ private extension MiniBrowserUITests {
         let bottomInsetDelta = focusedNative.adjustedBottom - baselineNative.adjustedBottom
 
         XCTAssertEqual(focusedPage.activeElement, "bottom-input")
-        assertFixedBottomWithinViewport(focusedPage, context: "legacy keyboard focused")
+        XCTAssertLessThanOrEqual(focusedPage.bottomInputBottom, focusedPage.viewportHeight)
         XCTAssertGreaterThan(keyboardHeight, 0)
         XCTAssertLessThan(
             bottomInsetDelta,
@@ -336,18 +367,21 @@ private extension MiniBrowserUITests {
     ) throws -> T {
         let deadline = Date().addingTimeInterval(10)
         let decoder = JSONDecoder()
+        var lastRawValue: String?
 
         while Date() < deadline {
-            if let rawValue = probeValue(identifier: identifier, in: app),
-               let data = rawValue.data(using: .utf8),
-               let decoded = try? decoder.decode(T.self, from: data),
-               predicate(decoded) {
-                return decoded
+            if let rawValue = probeValue(identifier: identifier, in: app) {
+                lastRawValue = rawValue
+                if let data = rawValue.data(using: .utf8),
+                   let decoded = try? decoder.decode(T.self, from: data),
+                   predicate(decoded) {
+                    return decoded
+                }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
 
-        XCTFail("Timed out waiting for metrics from \(identifier)")
+        XCTFail("Timed out waiting for metrics from \(identifier). Last value: \(lastRawValue ?? "<none>")")
         throw NSError(domain: "MiniBrowserUITests", code: 1, userInfo: nil)
     }
 

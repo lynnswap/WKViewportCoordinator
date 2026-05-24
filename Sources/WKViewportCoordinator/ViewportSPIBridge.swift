@@ -232,7 +232,7 @@ private struct LegacyViewportSPIState {
             contentScrollInset: resolvedMetrics.contentScrollInsetFallback,
             obscuredInsets: resolvedMetrics.obscuredInsets,
             unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
-            obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges,
+            obscuredSafeAreaEdges: resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea,
             layoutOverrideMode: .apply
         )
     }

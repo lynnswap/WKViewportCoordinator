@@ -21,13 +21,9 @@ Use ``ViewportCoordinator`` directly when you already own a custom `WKWebView` s
 ### Manual Coordination
 
 - ``ViewportCoordinator``
-- ``ViewportConfiguration``
-- ``ViewportMetricsSource``
-- ``ViewportMetricsProvider``
 
-### Viewport Metrics
+### Runtime Options
 
-- ``ViewportMetrics``
-- ``ViewportSafeAreaMetrics``
-- ``BottomChromeMode``
-- ``ScrollEdgeEffectStyle``
+- ``ViewportBottomBarObscurationBehavior``
+- ``ViewportScrollEdgeEffects``
+- ``ViewportScrollEdgeEffect``

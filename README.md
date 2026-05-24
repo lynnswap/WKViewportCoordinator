@@ -30,6 +30,7 @@ final class BrowserViewController: UIViewController {
 ```
 
 `ManagedViewportWebView` is the preferred integration path because it forwards hierarchy and safe-area lifecycle updates automatically.
+If you need non-default scroll inset adjustment, configure UIKit directly with `webView.scrollView.contentInsetAdjustmentBehavior`.
 
 If you attach `ViewportCoordinator` to your own `WKWebView` subclass, you must forward the relevant lifecycle hooks:
 
@@ -39,19 +40,31 @@ final class CustomViewportWebView: WKWebView {
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+        viewportCoordinator?.webViewSafeAreaInsetsDidChange()
     }
 }
 ```
 
-Call `handleViewDidAppear()` from the host view controller when you need an explicit refresh after presentation.
+Call `hostViewDidAppear()` from the host view controller when you need an explicit refresh after presentation.
+
+## Migration
+
+### v0.5.0
+
+These notes apply when upgrading from v0.4.x or earlier to v0.5.0.
+
+- `ViewportConfiguration` has been removed and replaced by individual runtime properties on `ViewportCoordinator`.
+- On `ManagedViewportWebView`, use `viewportObscuredContentInsetEdgesAffectedBySafeArea`, `viewportAdditionalObscuredContentInsets`, `viewportBottomBarObscurationBehavior`, and `viewportScrollEdgeEffects`.
+- Configure `contentInsetAdjustmentBehavior` directly with `webView.scrollView.contentInsetAdjustmentBehavior`.
+- Public metrics/provider APIs have been removed. Custom metrics injection is not provided in `v0.5.0`.
+- Removed APIs do not have compatibility shims.

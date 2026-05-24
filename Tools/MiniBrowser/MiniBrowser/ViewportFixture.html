@@ -144,6 +144,7 @@
             focusInput(identifier, requestID) {
                 const input = document.getElementById(identifier);
                 if (input) {
+                    input.scrollIntoView({ block: "center", inline: "nearest" });
                     input.focus();
                 }
                 scheduleStateCapture(requestID);
