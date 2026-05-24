@@ -82,8 +82,6 @@
     </main>
     <div class="fixed-bottom-marker" id="fixed-bottom-marker">Fixed Bottom Marker</div>
     <script>
-        const pendingStates = new Map();
-
         const buildErrorState = (message) => JSON.stringify({
             status: "error",
             revision: 0,
@@ -100,15 +98,14 @@
             errorMessage: String(message)
         });
 
-        const scheduleStateCapture = (requestID) => {
-            pendingStates.delete(requestID);
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                try {
-                    pendingStates.set(requestID, buildState());
-                } catch (error) {
-                    pendingStates.set(requestID, buildErrorState(error));
-                }
-            }));
+        const viewportHeight = () => Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight);
+
+        const withErrorState = (operation) => {
+            try {
+                return operation();
+            } catch (error) {
+                return buildErrorState(error);
+            }
         };
 
         const buildState = () => {
@@ -119,7 +116,7 @@
             const topRect = topMarker.getBoundingClientRect();
             const bottomRect = bottomInput.getBoundingClientRect();
             const fixedBottomRect = fixedBottomMarker.getBoundingClientRect();
-            const viewportHeight = Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight);
+            const currentViewportHeight = viewportHeight();
             return JSON.stringify({
                 status: "ready",
                 revision: 0,
@@ -130,29 +127,88 @@
                 bottomInputBottom: Math.round(bottomRect.bottom),
                 fixedBottomTop: Math.round(fixedBottomRect.top),
                 fixedBottomBottom: Math.round(fixedBottomRect.bottom),
-                viewportHeight,
-                bottomWithinViewport: Math.round(bottomRect.bottom) <= viewportHeight,
-                fixedBottomWithinViewport: Math.round(fixedBottomRect.bottom) <= viewportHeight,
+                viewportHeight: currentViewportHeight,
+                bottomWithinViewport: Math.round(bottomRect.bottom) <= currentViewportHeight,
+                fixedBottomWithinViewport: Math.round(fixedBottomRect.bottom) <= currentViewportHeight,
                 errorMessage: null
             });
         };
 
+        const focusInput = (identifier) => {
+            const input = document.getElementById(identifier);
+            if (!input) {
+                return false;
+            }
+            input.scrollIntoView({ block: "center", inline: "nearest" });
+            input.focus();
+            return document.activeElement === input;
+        };
+
+        const scrollElementIntoView = (identifier) => {
+            const scrollTarget = document.getElementById(identifier);
+            scrollTarget?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        };
+
+        const waitForViewportChangeAndBuildState = (previousViewportHeight) => {
+            const visualViewport = window.visualViewport;
+            if (!visualViewport || viewportHeight() !== previousViewportHeight) {
+                return Promise.resolve(buildState());
+            }
+
+            return new Promise((resolve) => {
+                let isResolved = false;
+                let remainingAnimationFrames = 2;
+                const finish = () => {
+                    if (isResolved) {
+                        return;
+                    }
+                    isResolved = true;
+                    visualViewport.removeEventListener("resize", handleResize);
+                    resolve(buildState());
+                };
+                const handleResize = () => {
+                    if (viewportHeight() === previousViewportHeight) {
+                        return;
+                    }
+                    finish();
+                };
+                const handleAnimationFrame = () => {
+                    if (viewportHeight() !== previousViewportHeight) {
+                        finish();
+                        return;
+                    }
+                    remainingAnimationFrames -= 1;
+                    if (remainingAnimationFrames <= 0) {
+                        finish();
+                        return;
+                    }
+                    requestAnimationFrame(handleAnimationFrame);
+                };
+                visualViewport.addEventListener("resize", handleResize);
+                requestAnimationFrame(handleAnimationFrame);
+                handleResize();
+            });
+        };
+
         window.testHarness = {
-            requestStateCapture(requestID) {
-                scheduleStateCapture(requestID);
+            captureState() {
+                return withErrorState(buildState);
             },
-            focusInput(identifier, requestID) {
-                const input = document.getElementById(identifier);
-                if (input) {
-                    input.scrollIntoView({ block: "center", inline: "nearest" });
-                    input.focus();
-                }
-                scheduleStateCapture(requestID);
+            captureStateAfterViewportChange(previousViewportHeight) {
+                return withErrorState(() => waitForViewportChangeAndBuildState(previousViewportHeight));
             },
-            takePendingState(requestID) {
-                const state = pendingStates.get(requestID) ?? null;
-                pendingStates.delete(requestID);
-                return state;
+            focusInput(identifier) {
+                return withErrorState(() => JSON.stringify({ status: focusInput(identifier) ? "ready" : "error" }));
+            },
+            scrollInputIntoViewAndCapture(identifier) {
+                return withErrorState(() => {
+                    const input = document.getElementById(identifier);
+                    if (!input) {
+                        return buildErrorState(`missing-input:${identifier}`);
+                    }
+                    scrollElementIntoView(identifier);
+                    return buildState();
+                });
             }
         };
     </script>

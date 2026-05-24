@@ -21,20 +21,6 @@
                ReferencedContainer = "container:MiniBrowser.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AB5625A42F7FAC5B000FBCE0"
-               BuildableName = "MiniBrowserUITests.xctest"
-               BlueprintName = "MiniBrowserUITests"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -53,16 +39,6 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AB5625A42F7FAC5B000FBCE0"
-               BuildableName = "MiniBrowserUITests.xctest"
-               BlueprintName = "MiniBrowserUITests"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

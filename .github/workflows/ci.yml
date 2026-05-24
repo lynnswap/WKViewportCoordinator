@@ -114,6 +114,7 @@ jobs:
           _, version, device_name, udid = matches.max_by { |components, _, _, _| components }
           File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
             env.puts "DESTINATION=platform=iOS Simulator,id=#{udid}"
+            env.puts "SIMULATOR_UDID=#{udid}"
             env.puts "RESOLVED_IOS_VERSION=#{version}"
           end
           puts "Resolved simulator: #{device_name} iOS #{version} (#{udid})"
@@ -136,13 +137,37 @@ jobs:
             -maximum-concurrent-test-simulator-destinations 1 \
             -only-testing:WKViewportCoordinatorTests
 
-      - name: Run MiniBrowser tests
+      - name: Run MiniBrowser self-test
         run: |
-          xcodebuild test \
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/MiniBrowserDerivedData"
+          xcodebuild build \
             -project Tools/MiniBrowser/MiniBrowser.xcodeproj \
             -scheme MiniBrowser \
             -destination "${DESTINATION}" \
-            -enableCodeCoverage NO \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            -only-testing:MiniBrowserUITests
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -enableCodeCoverage NO
+
+          APP_PATH="${DERIVED_DATA_PATH}/Build/Products/Debug-iphonesimulator/MiniBrowser.app"
+          test -d "${APP_PATH}"
+
+          xcrun simctl boot "${SIMULATOR_UDID}" || true
+          xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
+          xcrun simctl install "${SIMULATOR_UDID}" "${APP_PATH}"
+
+          set +e
+          SELF_TEST_OUTPUT="$(
+            SIMCTL_CHILD_MINIBROWSER_SELF_TEST=viewport \
+              xcrun simctl launch --console --terminate-running-process "${SIMULATOR_UDID}" lynnpd.MiniBrowser 2>&1
+          )"
+          SELF_TEST_STATUS=$?
+          set -e
+
+          printf '%s\n' "${SELF_TEST_OUTPUT}"
+          RESULT_LINE="$(grep "MINIBROWSER_SELF_TEST_RESULT" <<< "${SELF_TEST_OUTPUT}" | tail -n 1 || true)"
+          if [[ -z "${RESULT_LINE}" ]]; then
+            echo "MiniBrowser self-test did not emit a result marker"
+            exit 1
+          fi
+          RESULT_JSON="${RESULT_LINE#MINIBROWSER_SELF_TEST_RESULT }"
+          ruby -rjson -e 'result = JSON.parse(ARGV.fetch(0)); abort("MiniBrowser self-test failed: #{result}") unless result["status"] == "passed"' "${RESULT_JSON}"
+          exit "${SELF_TEST_STATUS}"

@@ -1,3 +1,5 @@
+import Darwin
+import ObjectiveC
 import Observation
 import SwiftUI
 import UIKit
@@ -21,6 +23,10 @@ struct MiniBrowserHarnessContainer: UIViewControllerRepresentable {
 @MainActor
 @Observable
 final class MiniBrowserHarnessState {
+    nonisolated enum SelfTestMode: String, Sendable {
+        case viewport
+    }
+
     nonisolated enum ChromeMode: String, CaseIterable, Codable, Sendable {
         case navigationBarVisible
         case navigationBarHidden
@@ -131,33 +137,57 @@ final class MiniBrowserHarnessState {
         )
     }
 
+    private struct FocusResult: Decodable {
+        var status: String
+    }
+
     let webView: ManagedViewportWebView
-    let commandSessionID: String
+    let selfTestMode: SelfTestMode?
+    private let selfTestInputDelegate: MiniBrowserSelfTestInputDelegate?
     private(set) var scenario: Scenario
     private(set) var chromeMode: ChromeMode
     private(set) var isAttached = true
     private(set) var fixtureLoaded = false
     private(set) var nativeMetrics: NativeMetrics
     private(set) var pageMetrics = PageMetrics.idle
-    private var nextPageMetricsRequestID = 0
-    private var pageMetricsGeneration = 0
 
     init(processInfo: ProcessInfo = .processInfo) {
         let initialScenario = Scenario(rawValue: processInfo.environment["MINIBROWSER_SCENARIO"] ?? "") ?? .standard
         let initialChromeMode = ChromeMode(rawValue: processInfo.environment["MINIBROWSER_CHROME_MODE"] ?? "") ?? .navigationBarHidden
-        let commandSessionID = processInfo.environment["MINIBROWSER_COMMAND_SESSION"] ?? UUID().uuidString
+        let selfTestMode = SelfTestMode(rawValue: processInfo.environment["MINIBROWSER_SELF_TEST"] ?? "")
+        let selfTestInputDelegate = selfTestMode == .viewport ? MiniBrowserSelfTestInputDelegate() : nil
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         let webView = ManagedViewportWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
+        if let selfTestInputDelegate {
+            Self.installSelfTestInputDelegate(selfTestInputDelegate, on: webView)
+        }
 
         self.webView = webView
-        self.commandSessionID = commandSessionID
+        self.selfTestMode = selfTestMode
+        self.selfTestInputDelegate = selfTestInputDelegate
         scenario = initialScenario
         chromeMode = initialChromeMode
         nativeMetrics = NativeMetrics.idle(for: initialScenario, chromeMode: initialChromeMode)
         applyViewportBehavior(for: initialScenario)
+    }
+
+    private static func installSelfTestInputDelegate(_ inputDelegate: MiniBrowserSelfTestInputDelegate, on webView: WKWebView) {
+        let selector = NSSelectorFromString("_setInputDelegate:")
+        guard webView.responds(to: selector) else {
+            return
+        }
+
+        typealias SetInputDelegate = @convention(c) (AnyObject, Selector, AnyObject) -> Void
+        let implementation = webView.method(for: selector)
+        let setInputDelegate = unsafeBitCast(implementation, to: SetInputDelegate.self)
+        setInputDelegate(webView, selector, inputDelegate)
+    }
+
+    var selfTestInputSessionStartCount: Int {
+        selfTestInputDelegate?.inputSessionStartCount ?? 0
     }
 
     var nativeMetricsJSON: String {
@@ -181,7 +211,6 @@ final class MiniBrowserHarnessState {
             return
         }
 
-        pageMetricsGeneration += 1
         fixtureLoaded = false
         pageMetrics = PageMetrics(
             status: "loading",
@@ -216,11 +245,12 @@ final class MiniBrowserHarnessState {
         nativeMetrics.chromeMode = chromeMode.rawValue
     }
 
-    func toggleAttachment() {
-        isAttached.toggle()
+    func setAttached(_ isAttached: Bool) {
+        self.isAttached = isAttached
     }
 
-    func captureNativeMetrics(in hostViewController: UIViewController) {
+    @discardableResult
+    func captureNativeMetrics(in hostViewController: UIViewController) -> NativeMetrics {
         hostViewController.navigationController?.view.layoutIfNeeded()
         hostViewController.view.layoutIfNeeded()
         webView.superview?.layoutIfNeeded()
@@ -239,7 +269,7 @@ final class MiniBrowserHarnessState {
         let contentInsets = webView.scrollView.contentInset
         let expectedInsets = expectedInsets(in: hostViewController, attached: attached && windowAttached)
 
-        nativeMetrics = NativeMetrics(
+        let metrics = NativeMetrics(
             status: "ready",
             revision: nativeMetrics.revision + 1,
             scenario: scenario.rawValue,
@@ -258,44 +288,79 @@ final class MiniBrowserHarnessState {
             expectedBottom: expectedInsets.bottom,
             errorMessage: nil
         )
+        nativeMetrics = metrics
+        return metrics
     }
 
     func capturePageMetrics() async {
-        guard fixtureLoaded else {
-            setPageMetricsLoading()
-            return
-        }
-
         do {
-            let requestID = makePageMetricsRequestID()
-            let generation = pageMetricsGeneration
-            try await evaluateJavaScriptVoid("window.testHarness.requestStateCapture(\(requestID));")
-            let rawJSON = try await nextPendingPageMetricsJSON(for: requestID, generation: generation)
-            pageMetrics = try decodePageMetrics(from: rawJSON)
+            try await refreshPageMetrics()
         } catch {
             handlePageMetricsFailure(error)
         }
+    }
+
+    @discardableResult
+    func refreshPageMetrics(afterViewportHeightChangeFrom previousViewportHeight: Int? = nil) async throws -> PageMetrics {
+        guard fixtureLoaded else {
+            setPageMetricsLoading()
+            throw PageMetricsError.fixtureNotLoaded
+        }
+
+        let script: String
+        if let previousViewportHeight {
+            script = "return window.testHarness.captureStateAfterViewportChange(\(previousViewportHeight));"
+        } else {
+            script = "return window.testHarness.captureState();"
+        }
+        let rawJSON = try await callAsyncJavaScriptString(script)
+        let metrics = try decodePageMetrics(from: rawJSON)
+        pageMetrics = metrics
+        return metrics
     }
 
     func focusBottomInput() async {
-        guard fixtureLoaded else {
-            setPageMetricsLoading()
-            return
-        }
-
         do {
-            let requestID = makePageMetricsRequestID()
-            let generation = pageMetricsGeneration
-            try await evaluateJavaScriptVoid("window.testHarness.focusInput('bottom-input', \(requestID));")
-            let rawJSON = try await nextPendingPageMetricsJSON(for: requestID, generation: generation)
-            pageMetrics = try decodePageMetrics(from: rawJSON)
+            try await focusBottomInputForSelfTest()
+            try await scrollBottomInputIntoViewAndRefreshPageMetrics()
         } catch {
             handlePageMetricsFailure(error)
         }
     }
 
+    @discardableResult
+    func focusBottomInputForSelfTest() async throws -> PageMetrics {
+        guard fixtureLoaded else {
+            setPageMetricsLoading()
+            throw PageMetricsError.fixtureNotLoaded
+        }
+
+        let rawJSON = try await callAsyncJavaScriptString(
+            "return window.testHarness.focusInput('bottom-input');"
+        )
+        let result = try JSONDecoder().decode(FocusResult.self, from: Data(rawJSON.utf8))
+        guard result.status == "ready" else {
+            throw PageMetricsError.focusFailed("focus failed")
+        }
+        return pageMetrics
+    }
+
+    @discardableResult
+    func scrollBottomInputIntoViewAndRefreshPageMetrics() async throws -> PageMetrics {
+        guard fixtureLoaded else {
+            setPageMetricsLoading()
+            throw PageMetricsError.fixtureNotLoaded
+        }
+
+        let rawJSON = try await callAsyncJavaScriptString(
+            "return window.testHarness.scrollInputIntoViewAndCapture('bottom-input');"
+        )
+        let metrics = try decodePageMetrics(from: rawJSON)
+        pageMetrics = metrics
+        return metrics
+    }
+
     func markPageMetricsError(_ message: String) {
-        pageMetricsGeneration += 1
         pageMetrics = errorPageMetrics(message: message)
     }
 
@@ -309,57 +374,12 @@ final class MiniBrowserHarnessState {
         return metrics
     }
 
-    private func makePageMetricsRequestID() -> Int {
-        nextPageMetricsRequestID += 1
-        return nextPageMetricsRequestID
-    }
-
-    private func nextPendingPageMetricsJSON(for requestID: Int, generation: Int) async throws -> String {
-        while true {
-            if let rawJSON = try await evaluateJavaScriptOptionalString("window.testHarness.takePendingState(\(requestID));") {
-                if pageMetricsGeneration != generation {
-                    throw PageMetricsError.fixtureReloaded
-                }
-                return rawJSON
-            }
-            if fixtureLoaded == false || pageMetricsGeneration != generation {
-                throw PageMetricsError.fixtureReloaded
-            }
-            try Task.checkCancellation()
-            try await Task.sleep(for: .milliseconds(20))
+    private func callAsyncJavaScriptString(_ script: String) async throws -> String {
+        let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+        guard let string = result as? String else {
+            throw PageMetricsError.unexpectedResultType
         }
-    }
-
-    private func evaluateJavaScriptOptionalString(_ script: String) async throws -> String? {
-        try await withCheckedThrowingContinuation { continuation in
-            webView.evaluateJavaScript(script) { result, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                if result is NSNull || result == nil {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                guard let string = result as? String else {
-                    continuation.resume(throwing: PageMetricsError.unexpectedResultType)
-                    return
-                }
-                continuation.resume(returning: string)
-            }
-        }
-    }
-
-    private func evaluateJavaScriptVoid(_ script: String) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            webView.evaluateJavaScript(script) { _, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                continuation.resume(returning: ())
-            }
-        }
+        return string
     }
 
     private func errorPageMetrics(message: String) -> PageMetrics {
@@ -399,12 +419,6 @@ final class MiniBrowserHarnessState {
     }
 
     private func handlePageMetricsFailure(_ error: any Error) {
-        if case PageMetricsError.fixtureReloaded = error {
-            if pageMetrics.status != "error" {
-                setPageMetricsLoading()
-            }
-            return
-        }
         pageMetrics = errorPageMetrics(message: error.localizedDescription)
     }
 
@@ -593,109 +607,26 @@ final class MiniBrowserHarnessState {
 
 private enum PageMetricsError: Error {
     case unexpectedResultType
-    case fixtureReloaded
+    case fixtureNotLoaded
+    case focusFailed(String)
 }
 
-nonisolated enum MiniBrowserHarnessAttachment: String, CaseIterable, Codable, Sendable {
-    case attached
-    case detached
+private final class MiniBrowserSelfTestInputDelegate: NSObject {
+    private(set) var inputSessionStartCount = 0
 
-    var isAttached: Bool {
-        self == .attached
-    }
-}
-
-nonisolated enum MiniBrowserHarnessCommand: Equatable, Sendable {
-    private static let notificationPrefix = "wkviewport.minibrowser.command"
-    private static let allowedSessionCharacters = CharacterSet.alphanumerics.union(
-        CharacterSet(charactersIn: "-_")
-    )
-
-    case setScenario(MiniBrowserHarnessState.Scenario)
-    case setChromeMode(MiniBrowserHarnessState.ChromeMode)
-    case setAttachment(MiniBrowserHarnessAttachment)
-    case reloadFixture
-    case focusBottomInput
-
-    func notificationName(for sessionID: String) -> String {
-        let encodedSessionID = Self.encodeSessionID(sessionID)
-        switch self {
-        case .setScenario(let scenario):
-            return "\(Self.notificationPrefix).\(encodedSessionID).setScenario.\(scenario.rawValue)"
-        case .setChromeMode(let chromeMode):
-            return "\(Self.notificationPrefix).\(encodedSessionID).setChromeMode.\(chromeMode.rawValue)"
-        case .setAttachment(let attachment):
-            return "\(Self.notificationPrefix).\(encodedSessionID).setAttachment.\(attachment.rawValue)"
-        case .reloadFixture:
-            return "\(Self.notificationPrefix).\(encodedSessionID).reloadFixture"
-        case .focusBottomInput:
-            return "\(Self.notificationPrefix).\(encodedSessionID).focusBottomInput"
-        }
+    @objc(_webView:focusShouldStartInputSession:)
+    func _webView(_ webView: WKWebView, focusShouldStartInputSession info: AnyObject) -> Bool {
+        true
     }
 
-    static func allNotificationNames(for sessionID: String) -> [String] {
-        MiniBrowserHarnessState.Scenario.allCases.map(Self.setScenario).map { $0.notificationName(for: sessionID) }
-        + MiniBrowserHarnessState.ChromeMode.allCases.map(Self.setChromeMode).map { $0.notificationName(for: sessionID) }
-        + MiniBrowserHarnessAttachment.allCases.map(Self.setAttachment).map { $0.notificationName(for: sessionID) }
-        + [Self.reloadFixture.notificationName(for: sessionID), Self.focusBottomInput.notificationName(for: sessionID)]
+    @objc(_webView:decidePolicyForFocusedElement:)
+    func _webView(_ webView: WKWebView, decidePolicyForFocusedElement info: AnyObject) -> Int {
+        1
     }
 
-    static func parse(notificationName: String) -> (sessionID: String, command: Self)? {
-        let prefix = "\(Self.notificationPrefix)."
-        guard notificationName.hasPrefix(prefix) else {
-            return nil
-        }
-
-        let suffix = String(notificationName.dropFirst(prefix.count))
-        let components = suffix.split(separator: ".", maxSplits: 2).map(String.init)
-        guard components.count >= 2 else {
-            return nil
-        }
-
-        guard let sessionID = Self.decodeSessionID(components[0]) else {
-            return nil
-        }
-        let command: Self
-        if components[1] == "reloadFixture" {
-            return (sessionID, .reloadFixture)
-        }
-        if components[1] == "focusBottomInput" {
-            return (sessionID, .focusBottomInput)
-        }
-
-        guard components.count == 3 else {
-            return nil
-        }
-
-        switch components[1] {
-        case "setScenario":
-            guard let scenario = MiniBrowserHarnessState.Scenario(rawValue: components[2]) else {
-                return nil
-            }
-            command = .setScenario(scenario)
-        case "setChromeMode":
-            guard let chromeMode = MiniBrowserHarnessState.ChromeMode(rawValue: components[2]) else {
-                return nil
-            }
-            command = .setChromeMode(chromeMode)
-        case "setAttachment":
-            guard let attachment = MiniBrowserHarnessAttachment(rawValue: components[2]) else {
-                return nil
-            }
-            command = .setAttachment(attachment)
-        default:
-            return nil
-        }
-
-        return (sessionID, command)
-    }
-
-    private static func encodeSessionID(_ sessionID: String) -> String {
-        sessionID.addingPercentEncoding(withAllowedCharacters: allowedSessionCharacters) ?? sessionID
-    }
-
-    private static func decodeSessionID(_ sessionID: String) -> String? {
-        sessionID.removingPercentEncoding
+    @objc(_webView:didStartInputSession:)
+    func _webView(_ webView: WKWebView, didStartInputSession inputSession: AnyObject) {
+        inputSessionStartCount += 1
     }
 }
 
@@ -703,10 +634,11 @@ nonisolated enum MiniBrowserHarnessCommand: Equatable, Sendable {
 final class MiniBrowserHarnessViewController: UIViewController {
     private let state: MiniBrowserHarnessState
     private let webViewContainerView = UIView()
-    private let commandReadinessProbeView = HarnessAccessibilityProbeView(identifier: "harness.command.ready")
-    private let nativeMetricsProbeView = HarnessAccessibilityProbeView(identifier: "harness.metrics.native")
-    private let pageMetricsProbeView = HarnessAccessibilityProbeView(identifier: "harness.metrics.page")
     private var webViewConstraints: [NSLayoutConstraint] = []
+    private var didStartSelfTest = false
+    private var selfTestTask: Task<Void, Never>?
+    private var selfTestWatchdog: DispatchSourceTimer?
+    private var currentSelfTestChecks: [String] = []
 
     private lazy var actionsItem: UIBarButtonItem = {
         let item = UIBarButtonItem(title: "Actions", image: nil, primaryAction: nil, menu: actionsMenu())
@@ -727,12 +659,11 @@ final class MiniBrowserHarnessViewController: UIViewController {
     init(state: MiniBrowserHarnessState) {
         self.state = state
         super.init(nibName: nil, bundle: nil)
-        MiniBrowserHarnessCommandCenter.shared.attach(self, sessionID: state.commandSessionID)
-        commandReadinessProbeView.accessibilityValue = state.commandSessionID
     }
 
     isolated deinit {
-        MiniBrowserHarnessCommandCenter.shared.detach(self)
+        selfTestTask?.cancel()
+        selfTestWatchdog?.cancel()
     }
 
     @available(*, unavailable)
@@ -759,6 +690,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
         super.viewDidAppear(animated)
         state.loadFixtureIfNeeded()
         scheduleNativeCapture()
+        startSelfTestIfReady()
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -771,31 +703,11 @@ final class MiniBrowserHarnessViewController: UIViewController {
         webViewContainerView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webViewContainerView)
 
-        [commandReadinessProbeView, nativeMetricsProbeView, pageMetricsProbeView].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview($0)
-        }
-
         NSLayoutConstraint.activate([
             webViewContainerView.topAnchor.constraint(equalTo: view.topAnchor),
             webViewContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webViewContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webViewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            commandReadinessProbeView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            commandReadinessProbeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            commandReadinessProbeView.widthAnchor.constraint(equalToConstant: 1),
-            commandReadinessProbeView.heightAnchor.constraint(equalToConstant: 1),
-
-            nativeMetricsProbeView.topAnchor.constraint(equalTo: commandReadinessProbeView.bottomAnchor),
-            nativeMetricsProbeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            nativeMetricsProbeView.widthAnchor.constraint(equalToConstant: 1),
-            nativeMetricsProbeView.heightAnchor.constraint(equalToConstant: 1),
-
-            pageMetricsProbeView.topAnchor.constraint(equalTo: nativeMetricsProbeView.bottomAnchor),
-            pageMetricsProbeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            pageMetricsProbeView.widthAnchor.constraint(equalToConstant: 1),
-            pageMetricsProbeView.heightAnchor.constraint(equalToConstant: 1)
+            webViewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
     }
 
@@ -806,11 +718,8 @@ final class MiniBrowserHarnessViewController: UIViewController {
     private func beginObservation() {
         withObservationTracking {
             _ = state.isAttached
-            _ = state.fixtureLoaded
             _ = state.scenario
             _ = state.chromeMode
-            _ = state.nativeMetricsJSON
-            _ = state.pageMetricsJSON
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else {
@@ -831,8 +740,6 @@ final class MiniBrowserHarnessViewController: UIViewController {
 
         applyChrome(animated: false)
         syncChromeControls()
-        nativeMetricsProbeView.accessibilityValue = state.nativeMetricsJSON
-        pageMetricsProbeView.accessibilityValue = state.pageMetricsJSON
     }
 
     private func attachWebViewIfNeeded() {
@@ -874,7 +781,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
                     title: scenario.displayName,
                     state: scenario == state.scenario ? .on : .off
                 ) { [weak self] _ in
-                    self?.applyCommand(.setScenario(scenario))
+                    self?.setScenario(scenario)
                 }
             }
         )
@@ -909,13 +816,16 @@ final class MiniBrowserHarnessViewController: UIViewController {
             title: "Actions",
             children: [
                 UIAction(title: "Reload") { [weak self] _ in
-                    self?.applyCommand(.reloadFixture)
+                    self?.reloadFixture()
                 },
                 UIAction(title: state.isAttached ? "Detach WebView" : "Attach WebView") { [weak self] _ in
-                    self?.applyCommand(.setAttachment(self?.state.isAttached == true ? .detached : .attached))
+                    guard let self else {
+                        return
+                    }
+                    self.setAttached(!self.state.isAttached)
                 },
                 UIAction(title: "Focus Bottom Input") { [weak self] _ in
-                    self?.applyCommand(.focusBottomInput)
+                    self?.focusBottomInput()
                 }
             ]
         )
@@ -929,33 +839,53 @@ final class MiniBrowserHarnessViewController: UIViewController {
                     title: chromeMode.displayName,
                     state: chromeMode == state.chromeMode ? .on : .off
                 ) { [weak self] _ in
-                    self?.applyCommand(.setChromeMode(chromeMode))
+                    self?.setChromeMode(chromeMode)
                 }
             }
         )
     }
 
-    fileprivate func applyCommand(_ command: MiniBrowserHarnessCommand) {
-        switch command {
-        case .setScenario(let scenario):
-            state.applyScenario(scenario)
-            scheduleSnapshotRefresh(includePage: true)
-        case .setChromeMode(let chromeMode):
-            state.applyChromeMode(chromeMode)
-            render()
-            scheduleSnapshotRefresh(includePage: true, initialDelay: .milliseconds(200))
-        case .setAttachment(let attachment):
-            guard state.isAttached != attachment.isAttached else {
-                scheduleNativeCapture()
+    private func setScenario(_ scenario: MiniBrowserHarnessState.Scenario) {
+        state.applyScenario(scenario)
+        scheduleSnapshotRefresh(includePage: true)
+    }
+
+    private func setChromeMode(_ chromeMode: MiniBrowserHarnessState.ChromeMode) {
+        state.applyChromeMode(chromeMode)
+        render()
+        scheduleSnapshotRefresh(includePage: true)
+    }
+
+    private func setAttached(_ isAttached: Bool) {
+        guard state.isAttached != isAttached else {
+            scheduleNativeCapture()
+            return
+        }
+        state.setAttached(isAttached)
+        render()
+        scheduleNativeCapture()
+    }
+
+    private func reloadFixture() {
+        state.reloadFixture()
+    }
+
+    private func focusBottomInput() {
+        Task { @MainActor [weak self] in
+            guard let self else {
                 return
             }
-            state.toggleAttachment()
-            render()
-            scheduleNativeCapture()
-        case .reloadFixture:
-            state.reloadFixture()
-        case .focusBottomInput:
-            performFocusBottomInputAction()
+            do {
+                let baselinePage = try await state.refreshPageMetrics()
+                try await state.focusBottomInputForSelfTest()
+                flushLayout()
+                try await state.refreshPageMetrics(afterViewportHeightChangeFrom: baselinePage.viewportHeight)
+                try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
+                state.captureNativeMetrics(in: self)
+            } catch {
+                state.markPageMetricsError(error.localizedDescription)
+                state.captureNativeMetrics(in: self)
+            }
         }
     }
 
@@ -973,7 +903,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
         }
     }
 
-    private func scheduleSnapshotRefresh(includePage: Bool, initialDelay: Duration = .zero) {
+    private func scheduleSnapshotRefresh(includePage: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self else {
                 return
@@ -982,32 +912,44 @@ final class MiniBrowserHarnessViewController: UIViewController {
                 guard let self else {
                     return
                 }
-                if initialDelay > .zero {
-                    try? await Task.sleep(for: initialDelay)
-                    self.navigationController?.view.layoutIfNeeded()
-                    self.view.layoutIfNeeded()
+                do {
+                    try await self.refreshSnapshot(includePage: includePage)
+                } catch {
+                    self.state.markPageMetricsError(error.localizedDescription)
+                    self.state.captureNativeMetrics(in: self)
                 }
-                self.state.captureNativeMetrics(in: self)
-                guard includePage else {
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(200))
-                await self.state.capturePageMetrics()
-                self.state.captureNativeMetrics(in: self)
             }
         }
     }
 
-    private func performFocusBottomInputAction() {
-        Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            await state.focusBottomInput()
-            try? await Task.sleep(for: .milliseconds(250))
-            state.captureNativeMetrics(in: self)
-            await state.capturePageMetrics()
+    @discardableResult
+    private func refreshSnapshot(
+        includePage: Bool,
+        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil
+    ) async throws -> (
+        native: MiniBrowserHarnessState.NativeMetrics,
+        page: MiniBrowserHarnessState.PageMetrics?
+    ) {
+        flushLayout()
+        let native = state.captureNativeMetrics(in: self)
+        guard includePage else {
+            return (native, nil)
         }
+        let page = try await state.refreshPageMetrics(afterViewportHeightChangeFrom: previousViewportHeight)
+        flushLayout()
+        let refreshedNative = state.captureNativeMetrics(in: self)
+        return (refreshedNative, page)
+    }
+
+    private func flushLayout() {
+        navigationController?.view.setNeedsLayout()
+        navigationController?.view.layoutIfNeeded()
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        webViewContainerView.setNeedsLayout()
+        webViewContainerView.layoutIfNeeded()
+        state.webView.setNeedsLayout()
+        state.webView.layoutIfNeeded()
     }
 }
 
@@ -1019,6 +961,7 @@ extension MiniBrowserHarnessViewController: WKNavigationDelegate {
         }
         state.markFixtureLoaded()
         scheduleSnapshotRefresh(includePage: true)
+        startSelfTestIfReady()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1038,105 +981,363 @@ extension MiniBrowserHarnessViewController: WKNavigationDelegate {
     }
 }
 
-private final class HarnessAccessibilityProbeView: UILabel {
-    init(identifier: String) {
-        super.init(frame: .zero)
-        isAccessibilityElement = true
-        accessibilityIdentifier = identifier
-        accessibilityTraits = .staticText
-        accessibilityLabel = identifier
-        accessibilityValue = "{}"
-        text = "."
-        textColor = .clear
-        backgroundColor = .clear
-        font = .systemFont(ofSize: 1)
-        alpha = 1
-        isUserInteractionEnabled = false
+private extension MiniBrowserHarnessViewController {
+    typealias NativeMetrics = MiniBrowserHarnessState.NativeMetrics
+    typealias PageMetrics = MiniBrowserHarnessState.PageMetrics
+
+    func startSelfTestIfReady() {
+        guard state.selfTestMode == .viewport else {
+            return
+        }
+        guard didStartSelfTest == false, state.fixtureLoaded, view.window != nil else {
+            return
+        }
+
+        didStartSelfTest = true
+        startSelfTestWatchdog()
+        selfTestTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await runViewportSelfTestAndExit()
+        }
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
+    func startSelfTestWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 60)
+        timer.setEventHandler { [weak self] in
+            guard let self else {
+                return
+            }
+            self.finishSelfTest(
+                status: "failed",
+                checks: self.currentSelfTestChecks,
+                failure: "deadlock-watchdog",
+                nativeMetrics: self.state.nativeMetrics,
+                pageMetrics: self.state.pageMetrics,
+                exitCode: 1
+            )
+        }
+        timer.resume()
+        selfTestWatchdog = timer
+    }
+
+    func runViewportSelfTestAndExit() async {
+        var checks: [String] = []
+        currentSelfTestChecks = checks
+        do {
+            let finalMetrics = try await runViewportSelfTest(checks: &checks)
+            finishSelfTest(
+                status: "passed",
+                checks: checks,
+                failure: nil,
+                nativeMetrics: finalMetrics.native,
+                pageMetrics: finalMetrics.page,
+                exitCode: 0
+            )
+        } catch {
+            finishSelfTest(
+                status: "failed",
+                checks: checks,
+                failure: String(describing: error),
+                nativeMetrics: state.nativeMetrics,
+                pageMetrics: state.pageMetrics,
+                exitCode: 1
+            )
+        }
+    }
+
+    func runViewportSelfTest(checks: inout [String]) async throws -> (native: NativeMetrics, page: PageMetrics) {
+        let initial = try await refreshSnapshot(includePage: true)
+        let initialPage = try requirePage(initial.page)
+        try check("initial scenario", initial.native.scenario == MiniBrowserHarnessState.Scenario.standard.rawValue, checks: &checks)
+        try check("initial chrome", initial.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarHidden.rawValue, checks: &checks)
+        try check("initial attachment", initial.native.attached && initial.native.windowAttached, checks: &checks)
+        try check("initial page top", initialPage.topMarkerTop >= 0, checks: &checks)
+        try check("initial fixed bottom", initialPage.fixedBottomWithinViewport, checks: &checks)
+        if #available(iOS 26.0, *) {
+            try check("initial obscured top", initial.native.obscuredTop == initial.native.expectedTop, checks: &checks)
+            try check("initial effective top", initial.native.effectiveTop > 0, checks: &checks)
+            try check("initial effective bottom", initial.native.effectiveBottom > 0, checks: &checks)
+        }
+
+        state.applyChromeMode(.navigationBarVisible)
+        render()
+        let chromeVisible = try await refreshSnapshot(
+            includePage: true,
+            afterViewportHeightChangeFrom: initialPage.viewportHeight
+        )
+        let chromeVisiblePage = try requirePage(chromeVisible.page)
+        try check("navigation chrome", chromeVisible.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarVisible.rawValue, checks: &checks)
+        try check("navigation fixed bottom", chromeVisiblePage.fixedBottomWithinViewport, checks: &checks)
+        if #available(iOS 26.0, *) {
+            try check("navigation obscured top", chromeVisible.native.obscuredTop == chromeVisible.native.expectedTop, checks: &checks)
+            try check("navigation expected top increased", chromeVisible.native.expectedTop > initial.native.expectedTop, checks: &checks)
+        }
+
+        state.applyScenario(.excludeTopSafeArea)
+        render()
+        let excluded = try await refreshSnapshot(includePage: true)
+        let excludedPage = try requirePage(excluded.page)
+        try check("exclude top scenario", excluded.native.scenario == MiniBrowserHarnessState.Scenario.excludeTopSafeArea.rawValue, checks: &checks)
+        try check(
+            "exclude top native stability",
+            abs(excluded.native.effectiveTop - chromeVisible.native.effectiveTop) <= 1,
+            "excludeTopSafeArea changed effectiveTop: visible=\(chromeVisible.native.effectiveTop), excluded=\(excluded.native.effectiveTop)",
+            checks: &checks
+        )
+        try check(
+            "exclude top page stability",
+            abs(excludedPage.topMarkerTop - chromeVisiblePage.topMarkerTop) <= 2,
+            "excludeTopSafeArea changed topMarkerTop: visible=\(chromeVisiblePage.topMarkerTop), excluded=\(excludedPage.topMarkerTop)",
+            checks: &checks
+        )
+
+        state.applyScenario(.standard)
+        render()
+        try await refreshSnapshot(includePage: true)
+
+        state.applyChromeMode(.navigationBarHidden)
+        render()
+        let chromeHidden = try await refreshSnapshot(
+            includePage: true,
+            afterViewportHeightChangeFrom: excludedPage.viewportHeight
+        )
+        let chromeHiddenPage = try requirePage(chromeHidden.page)
+        try check("restored chrome hidden", chromeHidden.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarHidden.rawValue, checks: &checks)
+        try check("restored fixed bottom", chromeHiddenPage.fixedBottomWithinViewport, checks: &checks)
+
+        if #available(iOS 26.0, *) {
+            return try await runModernViewportSelfTest(
+                reattachBaselineNative: chromeHidden.native,
+                checks: &checks
+            )
+        }
+
+        return try await runLegacyKeyboardSelfTest(
+            baselineNative: chromeHidden.native,
+            baselinePage: chromeHiddenPage,
+            checks: &checks
+        )
+    }
+
+    @available(iOS 26.0, *)
+    func runModernViewportSelfTest(
+        reattachBaselineNative: NativeMetrics,
+        checks: inout [String]
+    ) async throws -> (native: NativeMetrics, page: PageMetrics) {
+        state.setAttached(false)
+        render()
+        flushLayout()
+        let detachedNative = state.captureNativeMetrics(in: self)
+        try check("modern detached", detachedNative.attached == false && detachedNative.windowAttached == false, checks: &checks)
+        try check("modern detached expected insets", detachedNative.expectedTop == 0 && detachedNative.expectedBottom == 0, checks: &checks)
+
+        state.setAttached(true)
+        render()
+        let reattached = try await refreshSnapshot(includePage: true)
+        try requirePage(reattached.page)
+        try check("modern reattached", reattached.native.attached && reattached.native.windowAttached, checks: &checks)
+        try check("modern reattached obscured top", reattached.native.obscuredTop == reattached.native.expectedTop, checks: &checks)
+        try check("modern reattached effective top", reattached.native.effectiveTop > 0, checks: &checks)
+        try check("modern reattached effective bottom", reattached.native.effectiveBottom > 0, checks: &checks)
+
+        state.applyScenario(.neverAdjustment)
+        render()
+        let never = try await refreshSnapshot(includePage: true)
+        try requirePage(never.page)
+        try check("modern never scenario", never.native.scenario == MiniBrowserHarnessState.Scenario.neverAdjustment.rawValue, checks: &checks)
+        try check("modern never top", never.native.effectiveTop == never.native.obscuredTop, checks: &checks)
+        try check("modern never bottom", never.native.effectiveBottom == never.native.obscuredBottom, checks: &checks)
+        try check("modern never adjusted top", never.native.adjustedTop <= never.native.effectiveTop, checks: &checks)
+        try check("modern never adjusted bottom", never.native.adjustedBottom <= never.native.effectiveBottom, checks: &checks)
+
+        state.applyScenario(.standard)
+        render()
+        let standard = try await refreshSnapshot(includePage: true)
+        let standardPage = try requirePage(standard.page)
+        let focused = try await focusBottomInputAndCapture(baselinePage: standardPage)
+        try check("modern keyboard active element", focused.page.activeElement == "bottom-input", checks: &checks)
+        try check("modern keyboard height", focused.keyboardHeight > 0, checks: &checks)
+        try check("modern keyboard bottom", focused.native.effectiveBottom >= reattachBaselineNative.effectiveBottom, checks: &checks)
+        try check("modern fixed bottom", focused.page.fixedBottomWithinViewport, checks: &checks)
+        return (focused.native, focused.page)
+    }
+
+    func runLegacyKeyboardSelfTest(
+        baselineNative: NativeMetrics,
+        baselinePage: PageMetrics,
+        checks: inout [String]
+    ) async throws -> (native: NativeMetrics, page: PageMetrics) {
+        let focused = try await focusBottomInputAndCapture(baselinePage: baselinePage)
+        let keyboardHeight = focused.keyboardHeight
+        let bottomInsetDelta = focused.native.adjustedBottom - baselineNative.adjustedBottom
+
+        try check("legacy keyboard active element", focused.page.activeElement == "bottom-input", checks: &checks)
+        try check("legacy keyboard input visible", focused.page.bottomInputBottom <= focused.page.viewportHeight, checks: &checks)
+        try check("legacy keyboard height", keyboardHeight > 0, checks: &checks)
+        try check(
+            "legacy keyboard inset delta",
+            bottomInsetDelta < Int((Double(keyboardHeight) * 1.6).rounded()),
+            "legacy path added too much bottom inset: keyboard=\(keyboardHeight), delta=\(bottomInsetDelta)",
+            checks: &checks
+        )
+        return (focused.native, focused.page)
+    }
+
+    func focusBottomInputAndCapture(baselinePage: PageMetrics) async throws -> (
+        native: NativeMetrics,
+        page: PageMetrics,
+        keyboardHeight: Int
+    ) {
+        let keyboardObserver = KeyboardFrameObserver()
+        let inputSessionBaseline = state.selfTestInputSessionStartCount
+        try await state.focusBottomInputForSelfTest()
+        flushLayout()
+        let resizedPage = try await state.refreshPageMetrics(afterViewportHeightChangeFrom: baselinePage.viewportHeight)
+        let page = try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
+        let native = state.captureNativeMetrics(in: self)
+        let notifiedKeyboardHeight = Int((keyboardObserver.frame?.height ?? 0).rounded())
+        let currentKeyboardHeight = Self.currentKeyboardHeight()
+        let visualViewportKeyboardHeight = max(0, baselinePage.viewportHeight - resizedPage.viewportHeight)
+        let keyboardHeight = max(notifiedKeyboardHeight, currentKeyboardHeight, visualViewportKeyboardHeight)
+        guard state.selfTestInputSessionStartCount > inputSessionBaseline else {
+            throw MiniBrowserSelfTestFailure(message: "keyboard input session did not start")
+        }
+        return (native, page, keyboardHeight)
+    }
+
+    @discardableResult
+    func requirePage(_ page: PageMetrics?) throws -> PageMetrics {
+        guard let page else {
+            throw MiniBrowserSelfTestFailure(message: "missing page metrics")
+        }
+        guard page.status == "ready" else {
+            throw MiniBrowserSelfTestFailure(message: "page metrics not ready: \(page)")
+        }
+        return page
+    }
+
+    func check(
+        _ name: String,
+        _ condition: @autoclosure () -> Bool,
+        _ failureMessage: String? = nil,
+        checks: inout [String]
+    ) throws {
+        guard condition() else {
+            throw MiniBrowserSelfTestFailure(message: failureMessage ?? "check failed: \(name)")
+        }
+        checks.append(name)
+        currentSelfTestChecks = checks
+    }
+
+    func finishSelfTest(
+        status: String,
+        checks: [String],
+        failure: String?,
+        nativeMetrics: NativeMetrics,
+        pageMetrics: PageMetrics,
+        exitCode: Int32
+    ) -> Never {
+        selfTestWatchdog?.cancel()
+        selfTestWatchdog = nil
+
+        let result = MiniBrowserSelfTestResult(
+            status: status,
+            checks: checks,
+            failure: failure,
+            nativeMetrics: nativeMetrics,
+            pageMetrics: pageMetrics
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(result), let json = String(data: data, encoding: .utf8) {
+            print("MINIBROWSER_SELF_TEST_RESULT \(json)")
+        } else {
+            print("MINIBROWSER_SELF_TEST_RESULT {\"status\":\"failed\",\"failure\":\"encoding-failed\"}")
+        }
+        fflush(stdout)
+        exit(exitCode)
+    }
+
+    static func currentKeyboardHeight() -> Int {
+        guard let keyboardView = currentKeyboardView(), keyboardView.window != nil else {
+            return 0
+        }
+        guard keyboardView.isHidden == false, keyboardView.alpha > 0 else {
+            return 0
+        }
+        return Int(keyboardView.bounds.height.rounded())
+    }
+
+    static func currentKeyboardView() -> UIView? {
+        guard let keyboardImplClass = NSClassFromString("UIKeyboardImpl") else {
+            return nil
+        }
+        let selector = NSSelectorFromString("activeInstance")
+        guard let method = class_getClassMethod(keyboardImplClass, selector) else {
+            return nil
+        }
+        typealias ActiveInstance = @convention(c) (AnyClass, Selector) -> AnyObject?
+        let implementation = method_getImplementation(method)
+        let activeInstance = unsafeBitCast(implementation, to: ActiveInstance.self)
+        return activeInstance(keyboardImplClass, selector) as? UIView
+    }
+}
+
+private struct MiniBrowserSelfTestResult: Codable {
+    var status: String
+    var checks: [String]
+    var failure: String?
+    var nativeMetrics: MiniBrowserHarnessState.NativeMetrics
+    var pageMetrics: MiniBrowserHarnessState.PageMetrics
+}
+
+private struct MiniBrowserSelfTestFailure: Error, CustomStringConvertible {
+    var message: String
+
+    var description: String {
+        message
     }
 }
 
 @MainActor
-private final class MiniBrowserHarnessCommandCenter {
-    static let shared = MiniBrowserHarnessCommandCenter()
+private final class KeyboardFrameObserver {
+    private let notificationCenter: NotificationCenter
+    private var observer: NSObjectProtocol?
+    private(set) var frame: CGRect?
 
-    private weak var handler: MiniBrowserHarnessViewController?
-    private var sessionID: String?
-    private var observedNotificationNames: [String] = []
-
-    private init() {}
-
-    func attach(_ handler: MiniBrowserHarnessViewController, sessionID: String) {
-        if self.sessionID != sessionID {
-            updateObservedNotifications(for: sessionID)
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
+        observer = notificationCenter.addObserver(
+            forName: UIResponder.keyboardDidChangeFrameNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let frame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .null
+            Task { @MainActor [weak self] in
+                self?.receive(frame)
+            }
         }
-        self.handler = handler
-        self.sessionID = sessionID
     }
 
-    func detach(_ handler: MiniBrowserHarnessViewController) {
-        guard self.handler === handler else {
+    isolated deinit {
+        invalidate()
+    }
+
+    private func receive(_ frame: CGRect) {
+        guard self.frame == nil else {
             return
         }
-        self.handler = nil
-        self.sessionID = nil
-        updateObservedNotifications(for: nil)
+        self.frame = frame
+        invalidate()
     }
 
-    nonisolated func handleDarwinNotification(named notificationName: String) {
-        Task { @MainActor in
-            self.route(notificationName: notificationName)
+    private func invalidate() {
+        if let observer {
+            notificationCenter.removeObserver(observer)
+            self.observer = nil
         }
     }
-
-    private func route(notificationName: String) {
-        guard
-            let (sessionID, command) = MiniBrowserHarnessCommand.parse(notificationName: notificationName),
-            sessionID == self.sessionID,
-            let handler
-        else {
-            return
-        }
-
-        handler.applyCommand(command)
-    }
-
-    private func updateObservedNotifications(for sessionID: String?) {
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        for notificationName in observedNotificationNames {
-            CFNotificationCenterRemoveObserver(center, nil, CFNotificationName(notificationName as CFString), nil)
-        }
-
-        guard let sessionID else {
-            observedNotificationNames = []
-            return
-        }
-
-        let notificationNames = MiniBrowserHarnessCommand.allNotificationNames(for: sessionID)
-        for notificationName in notificationNames {
-            CFNotificationCenterAddObserver(
-                center,
-                nil,
-                miniBrowserHarnessCommandNotificationCallback,
-                notificationName as CFString,
-                nil,
-                .deliverImmediately
-            )
-        }
-        observedNotificationNames = notificationNames
-    }
-}
-
-private let miniBrowserHarnessCommandNotificationCallback: CFNotificationCallback = { _, _, name, _, _ in
-    guard
-        let rawName = name?.rawValue as String?
-    else {
-        return
-    }
-
-    MiniBrowserHarnessCommandCenter.shared.handleDarwinNotification(named: rawName)
 }
