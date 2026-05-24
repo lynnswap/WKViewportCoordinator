@@ -8,6 +8,7 @@
 - Swift 6.2+
 - `WKWebView`-based viewport management with keyboard and safe-area coordination
 
+> [!WARNING]
 > This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
 
 ## Usage
