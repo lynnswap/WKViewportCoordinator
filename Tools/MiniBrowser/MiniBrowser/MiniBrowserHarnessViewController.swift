@@ -5,7 +5,6 @@ import Observation
 import SwiftUI
 import UIKit
 import WebKit
-@_spi(Testing)
 import WKViewportCoordinator
 
 @MainActor
@@ -344,7 +343,7 @@ final class MiniBrowserHarnessState {
         let adjustedInsets = webView.scrollView.adjustedContentInset
         let contentInsets = webView.scrollView.contentInset
         let projectedInsets = projectedChromeInsets(in: hostViewController, attached: attached && windowAttached)
-        let runtimeDiagnostics = ViewportRuntimeDiagnosticsReader.capture(for: webView)
+        let runtimeDiagnostics = MiniBrowserViewportRuntimeDiagnosticsReader.capture(for: webView)
 
         let metrics = NativeMetrics(
             status: "ready",
@@ -1756,6 +1755,100 @@ private extension MiniBrowserHarnessViewController {
         return activeInstance(keyboardImplClass, selector) as? UIView
     }
 
+}
+
+private struct MiniBrowserViewportRuntimeDiagnostics: Equatable {
+    var publicObscuredContentInsets: UIEdgeInsets?
+    var privateObscuredInsets: UIEdgeInsets?
+    var computedObscuredInset: UIEdgeInsets?
+    var computedUnobscuredSafeAreaInset: UIEdgeInsets?
+    var scrollViewSystemContentInset: UIEdgeInsets?
+    var scrollViewPrivateSystemContentInset: UIEdgeInsets?
+    var webViewSafeAreaInsets: UIEdgeInsets
+    var minimumViewportInset: UIEdgeInsets
+    var maximumViewportInset: UIEdgeInsets
+    var haveSetObscuredInsets: Bool?
+    var haveSetUnobscuredSafeAreaInsets: Bool?
+}
+
+@MainActor
+private enum MiniBrowserViewportRuntimeDiagnosticsReader {
+    static func capture(for webView: WKWebView) -> MiniBrowserViewportRuntimeDiagnostics {
+        let publicObscuredContentInsets: UIEdgeInsets?
+        if #available(iOS 26.0, *) {
+            publicObscuredContentInsets = webView.obscuredContentInsets
+        } else {
+            publicObscuredContentInsets = nil
+        }
+
+        return MiniBrowserViewportRuntimeDiagnostics(
+            publicObscuredContentInsets: publicObscuredContentInsets,
+            privateObscuredInsets: MiniBrowserViewportRuntimeSPIInvocation.readInsets(
+                MiniBrowserViewportRuntimeSPI.obscuredInsets,
+                from: webView
+            ),
+            computedObscuredInset: MiniBrowserViewportRuntimeSPIInvocation.readInsets(
+                MiniBrowserViewportRuntimeSPI.computedObscuredInset,
+                from: webView
+            ),
+            computedUnobscuredSafeAreaInset: MiniBrowserViewportRuntimeSPIInvocation.readInsets(
+                MiniBrowserViewportRuntimeSPI.computedUnobscuredSafeAreaInset,
+                from: webView
+            ),
+            scrollViewSystemContentInset: MiniBrowserViewportRuntimeSPIInvocation.readInsets(
+                MiniBrowserViewportRuntimeSPI.scrollViewSystemContentInset,
+                from: webView
+            ),
+            scrollViewPrivateSystemContentInset: MiniBrowserViewportRuntimeSPIInvocation.readInsets(
+                MiniBrowserViewportRuntimeSPI.systemContentInset,
+                from: webView.scrollView
+            ),
+            webViewSafeAreaInsets: webView.safeAreaInsets,
+            minimumViewportInset: webView.minimumViewportInset,
+            maximumViewportInset: webView.maximumViewportInset,
+            haveSetObscuredInsets: MiniBrowserViewportRuntimeSPIInvocation.readBool(
+                MiniBrowserViewportRuntimeSPI.haveSetObscuredInsets,
+                from: webView
+            ),
+            haveSetUnobscuredSafeAreaInsets: MiniBrowserViewportRuntimeSPIInvocation.readBool(
+                MiniBrowserViewportRuntimeSPI.haveSetUnobscuredSafeAreaInsets,
+                from: webView
+            )
+        )
+    }
+}
+
+private enum MiniBrowserViewportRuntimeSPI {
+    static let obscuredInsets = NSSelectorFromString("_obscuredInsets")
+    static let computedObscuredInset = NSSelectorFromString("_computedObscuredInset")
+    static let computedUnobscuredSafeAreaInset = NSSelectorFromString("_computedUnobscuredSafeAreaInset")
+    static let scrollViewSystemContentInset = NSSelectorFromString("_scrollViewSystemContentInset")
+    static let systemContentInset = NSSelectorFromString("_systemContentInset")
+    static let haveSetObscuredInsets = NSSelectorFromString("_haveSetObscuredInsets")
+    static let haveSetUnobscuredSafeAreaInsets = NSSelectorFromString("_haveSetUnobscuredSafeAreaInsets")
+}
+
+private enum MiniBrowserViewportRuntimeSPIInvocation {
+    typealias InsetsGetter = @convention(c) (NSObject, Selector) -> UIEdgeInsets
+    typealias BoolGetter = @convention(c) (NSObject, Selector) -> Bool
+
+    static func readInsets(_ selector: Selector, from object: NSObject) -> UIEdgeInsets? {
+        guard object.responds(to: selector) else {
+            return nil
+        }
+
+        let implementation = unsafe unsafeBitCast(object.method(for: selector), to: InsetsGetter.self)
+        return implementation(object, selector)
+    }
+
+    static func readBool(_ selector: Selector, from object: NSObject) -> Bool? {
+        guard object.responds(to: selector) else {
+            return nil
+        }
+
+        let implementation = unsafe unsafeBitCast(object.method(for: selector), to: BoolGetter.self)
+        return implementation(object, selector)
+    }
 }
 
 private struct MiniBrowserSelfTestSnapshot: Codable {
