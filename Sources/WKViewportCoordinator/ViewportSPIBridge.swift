@@ -40,6 +40,20 @@ enum ViewportSPISelectorNames {
     static let scrollViewSystemContentInset = deobfuscate(["Inset", "Content", "System", "View", "scroll", "_"])
     // Original: _systemContentInset
     static let systemContentInset = deobfuscate(["Inset", "Content", "system", "_"])
+    // Original: _obscuredInsets
+    static let obscuredInsets = deobfuscate(["Insets", "obscured", "_"])
+    // Original: _computedObscuredInset
+    static let computedObscuredInset = deobfuscate(["Inset", "Obscured", "computed", "_"])
+    // Original: _computedUnobscuredSafeAreaInset
+    static let computedUnobscuredSafeAreaInset = deobfuscate([
+        "Inset", "Area", "Safe", "Unobscured", "computed", "_"
+    ])
+    // Original: _haveSetObscuredInsets
+    static let haveSetObscuredInsets = deobfuscate(["Insets", "Obscured", "Set", "have", "_"])
+    // Original: _haveSetUnobscuredSafeAreaInsets
+    static let haveSetUnobscuredSafeAreaInsets = deobfuscate([
+        "Insets", "Area", "Safe", "Unobscured", "Set", "have", "_"
+    ])
     // Original: _frameOrBoundsMayHaveChanged
     static let frameOrBoundsMayHaveChanged = deobfuscate(["Changed", "Have", "May", "Bounds", "Or", "frame", "_"])
     // Original: _inputViewBoundsInWindow
@@ -83,6 +97,21 @@ private enum ViewportSPISelectors {
     static let systemContentInset = NSSelectorFromString(
         ViewportSPISelectorNames.systemContentInset
     )
+    static let obscuredInsets = NSSelectorFromString(
+        ViewportSPISelectorNames.obscuredInsets
+    )
+    static let computedObscuredInset = NSSelectorFromString(
+        ViewportSPISelectorNames.computedObscuredInset
+    )
+    static let computedUnobscuredSafeAreaInset = NSSelectorFromString(
+        ViewportSPISelectorNames.computedUnobscuredSafeAreaInset
+    )
+    static let haveSetObscuredInsets = NSSelectorFromString(
+        ViewportSPISelectorNames.haveSetObscuredInsets
+    )
+    static let haveSetUnobscuredSafeAreaInsets = NSSelectorFromString(
+        ViewportSPISelectorNames.haveSetUnobscuredSafeAreaInsets
+    )
     static let frameOrBoundsMayHaveChanged = NSSelectorFromString(
         ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
     )
@@ -99,6 +128,7 @@ private enum ViewportSPIInvocation {
     typealias EdgeSetter = @convention(c) (NSObject, Selector, UInt) -> Void
     typealias VoidMethod = @convention(c) (NSObject, Selector) -> Void
     typealias InsetsGetter = @convention(c) (NSObject, Selector) -> UIEdgeInsets
+    typealias BoolGetter = @convention(c) (NSObject, Selector) -> Bool
     typealias RectGetter = @convention(c) (NSObject, Selector) -> CGRect
     typealias FullLayoutOverrideSetter = @convention(c) (NSObject, Selector, CGSize, CGSize, CGSize) -> Void
     typealias MaximumOnlyLayoutOverrideSetter = @convention(c) (NSObject, Selector, CGSize, CGSize) -> Void
@@ -203,6 +233,15 @@ private enum ViewportSPIInvocation {
         return implementation(object, selector)
     }
 
+    static func readBool(_ selector: Selector, from object: NSObject) -> Bool? {
+        guard object.responds(to: selector) else {
+            return nil
+        }
+
+        let implementation = unsafe unsafeBitCast(object.method(for: selector), to: BoolGetter.self)
+        return implementation(object, selector)
+    }
+
     static func readRect(_ selector: Selector, from object: NSObject) -> CGRect? {
         guard object.responds(to: selector) else {
             return nil
@@ -244,6 +283,71 @@ private struct LegacyViewportSPIState {
         obscuredSafeAreaEdges: [],
         layoutOverrideMode: .reset
     )
+}
+
+@_spi(Testing) public struct ViewportRuntimeDiagnostics: Equatable {
+    public let publicObscuredContentInsets: UIEdgeInsets?
+    public let privateObscuredInsets: UIEdgeInsets?
+    public let computedObscuredInset: UIEdgeInsets?
+    public let computedUnobscuredSafeAreaInset: UIEdgeInsets?
+    public let scrollViewSystemContentInset: UIEdgeInsets?
+    public let scrollViewPrivateSystemContentInset: UIEdgeInsets?
+    public let scrollViewAdjustedContentInset: UIEdgeInsets
+    public let scrollViewContentInset: UIEdgeInsets
+    public let webViewSafeAreaInsets: UIEdgeInsets
+    public let minimumViewportInset: UIEdgeInsets
+    public let maximumViewportInset: UIEdgeInsets
+    public let haveSetObscuredInsets: Bool?
+    public let haveSetUnobscuredSafeAreaInsets: Bool?
+}
+
+@_spi(Testing) public enum ViewportRuntimeDiagnosticsReader {
+    @MainActor
+    public static func capture(for webView: WKWebView) -> ViewportRuntimeDiagnostics {
+        let publicObscuredContentInsets: UIEdgeInsets?
+        if #available(iOS 26.0, *) {
+            publicObscuredContentInsets = webView.obscuredContentInsets
+        } else {
+            publicObscuredContentInsets = nil
+        }
+
+        return ViewportRuntimeDiagnostics(
+            publicObscuredContentInsets: publicObscuredContentInsets,
+            privateObscuredInsets: ViewportSPIInvocation.readInsets(
+                ViewportSPISelectors.obscuredInsets,
+                from: webView
+            ),
+            computedObscuredInset: ViewportSPIInvocation.readInsets(
+                ViewportSPISelectors.computedObscuredInset,
+                from: webView
+            ),
+            computedUnobscuredSafeAreaInset: ViewportSPIInvocation.readInsets(
+                ViewportSPISelectors.computedUnobscuredSafeAreaInset,
+                from: webView
+            ),
+            scrollViewSystemContentInset: ViewportSPIInvocation.readInsets(
+                ViewportSPISelectors.scrollViewSystemContentInset,
+                from: webView
+            ),
+            scrollViewPrivateSystemContentInset: ViewportSPIInvocation.readInsets(
+                ViewportSPISelectors.systemContentInset,
+                from: webView.scrollView
+            ),
+            scrollViewAdjustedContentInset: webView.scrollView.adjustedContentInset,
+            scrollViewContentInset: webView.scrollView.contentInset,
+            webViewSafeAreaInsets: webView.safeAreaInsets,
+            minimumViewportInset: webView.minimumViewportInset,
+            maximumViewportInset: webView.maximumViewportInset,
+            haveSetObscuredInsets: ViewportSPIInvocation.readBool(
+                ViewportSPISelectors.haveSetObscuredInsets,
+                from: webView
+            ),
+            haveSetUnobscuredSafeAreaInsets: ViewportSPIInvocation.readBool(
+                ViewportSPISelectors.haveSetUnobscuredSafeAreaInsets,
+                from: webView
+            )
+        )
+    }
 }
 
 // Handles the private layout-viewport override selectors used by the legacy

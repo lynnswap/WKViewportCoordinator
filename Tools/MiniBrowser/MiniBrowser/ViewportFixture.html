@@ -82,7 +82,7 @@
     </main>
     <div class="fixed-bottom-marker" id="fixed-bottom-marker">Fixed Bottom Marker</div>
     <script>
-        const buildErrorState = (message) => JSON.stringify({
+        const buildErrorStateObject = (message) => ({
             status: "error",
             revision: 0,
             activeElement: "",
@@ -98,6 +98,8 @@
             errorMessage: String(message)
         });
 
+        const buildErrorState = (message) => JSON.stringify(buildErrorStateObject(message));
+
         const viewportHeight = () => Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight);
 
         const withErrorState = (operation) => {
@@ -108,7 +110,7 @@
             }
         };
 
-        const buildState = () => {
+        const buildStateObject = () => {
             const activeElement = document.activeElement?.id || "none";
             const topMarker = document.getElementById("top-marker");
             const bottomInput = document.getElementById("bottom-input");
@@ -117,7 +119,7 @@
             const bottomRect = bottomInput.getBoundingClientRect();
             const fixedBottomRect = fixedBottomMarker.getBoundingClientRect();
             const currentViewportHeight = viewportHeight();
-            return JSON.stringify({
+            return {
                 status: "ready",
                 revision: 0,
                 activeElement,
@@ -131,8 +133,10 @@
                 bottomWithinViewport: Math.round(bottomRect.bottom) <= currentViewportHeight,
                 fixedBottomWithinViewport: Math.round(fixedBottomRect.bottom) <= currentViewportHeight,
                 errorMessage: null
-            });
+            };
         };
+
+        const buildState = () => JSON.stringify(buildStateObject());
 
         const focusInput = (identifier) => {
             const input = document.getElementById(identifier);
@@ -177,8 +181,68 @@
         };
 
         const waitForRenderingUpdateAndBuildState = () => new Promise((resolve) => {
-            requestAnimationFrame(() => resolve(buildState()));
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => resolve(buildState()));
+            });
         });
+
+        const stabilityKey = (state) => [
+            state.activeElement,
+            state.topMarkerTop,
+            state.topMarkerBottom,
+            state.bottomInputTop,
+            state.bottomInputBottom,
+            state.fixedBottomTop,
+            state.fixedBottomBottom,
+            state.viewportHeight
+        ].join(":");
+
+        const waitForSettledState = () => new Promise((resolve) => {
+            let lastKey = "";
+            let stableSampleCount = 0;
+            let frameCount = 0;
+            const maximumFrameCount = 30;
+
+            const sample = () => {
+                const metrics = buildStateObject();
+                const key = stabilityKey(metrics);
+                frameCount += 1;
+                if (key === lastKey) {
+                    stableSampleCount += 1;
+                } else {
+                    lastKey = key;
+                    stableSampleCount = 1;
+                }
+
+                if (stableSampleCount >= 2 || frameCount >= maximumFrameCount) {
+                    resolve({ metrics, stableSampleCount, frameCount });
+                    return;
+                }
+
+                requestAnimationFrame(sample);
+            };
+
+            requestAnimationFrame(sample);
+        });
+
+        const postViewportReport = (reason, sequence, settledState) => {
+            const handler = window.webkit?.messageHandlers?.viewportHarness;
+            if (handler) {
+                handler.postMessage({
+                    reason: String(reason),
+                    sequence: Number(sequence),
+                    phase: "settled",
+                    stableSampleCount: settledState.stableSampleCount,
+                    frameCount: settledState.frameCount,
+                    metrics: settledState.metrics
+                });
+            }
+            return JSON.stringify(settledState.metrics);
+        };
+
+        const reportSettledState = (reason, sequence) => {
+            return waitForSettledState().then((settledState) => postViewportReport(reason, sequence, settledState));
+        };
 
         window.testHarness = {
             captureState() {
@@ -189,6 +253,9 @@
             },
             captureStateAfterRenderingUpdate() {
                 return withErrorState(waitForRenderingUpdateAndBuildState);
+            },
+            reportSettledState(reason, sequence) {
+                return withErrorState(() => reportSettledState(reason, sequence));
             },
             focusInput(identifier) {
                 return withErrorState(() => JSON.stringify({ status: focusInput(identifier) ? "ready" : "error" }));
@@ -201,6 +268,16 @@
                     }
                     scrollElementIntoView(identifier);
                     return buildState();
+                });
+            },
+            scrollInputIntoViewAndReport(identifier, reason, sequence) {
+                return withErrorState(() => {
+                    const input = document.getElementById(identifier);
+                    if (!input) {
+                        return buildErrorState(`missing-input:${identifier}`);
+                    }
+                    scrollElementIntoView(identifier);
+                    return reportSettledState(reason, sequence);
                 });
             }
         };

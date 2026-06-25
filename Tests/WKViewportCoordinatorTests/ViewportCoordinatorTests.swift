@@ -1544,6 +1544,15 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func viewportRuntimeDiagnosticSelectorNamesMatchWebKitSPI() {
+        #expect(ViewportSPISelectorNames.obscuredInsets == "_obscuredInsets")
+        #expect(ViewportSPISelectorNames.computedObscuredInset == "_computedObscuredInset")
+        #expect(ViewportSPISelectorNames.computedUnobscuredSafeAreaInset == "_computedUnobscuredSafeAreaInset")
+        #expect(ViewportSPISelectorNames.haveSetObscuredInsets == "_haveSetObscuredInsets")
+        #expect(ViewportSPISelectorNames.haveSetUnobscuredSafeAreaInsets == "_haveSetUnobscuredSafeAreaInsets")
+    }
+
+    @Test
     func viewportSPIBridgeLegacyViewportFallbackAppliesSafeAreaMetadataInOrder() {
         let object = TestViewportSPIObject()
         let resolvedMetrics = ResolvedViewportMetrics(
