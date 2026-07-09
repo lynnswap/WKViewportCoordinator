@@ -44,6 +44,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Resolve Xcode
         run: |
@@ -129,9 +131,11 @@ jobs:
 
       - name: Run package tests
         run: |
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/DerivedData"
           xcodebuild test \
             -scheme WKViewportCoordinator \
             -destination "${DESTINATION}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
@@ -139,7 +143,7 @@ jobs:
 
       - name: Run MiniBrowser self-test
         run: |
-          DERIVED_DATA_PATH="${RUNNER_TEMP}/MiniBrowserDerivedData"
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/DerivedData"
           xcodebuild build \
             -project Tools/MiniBrowser/MiniBrowser.xcodeproj \
             -scheme MiniBrowser \
