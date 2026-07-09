@@ -57,6 +57,7 @@ jobs:
         run: |
           DERIVED_DATA_PATH="${RUNNER_TEMP}/DocCDerivedData"
           rm -rf "${DERIVED_DATA_PATH}" .build/docs
+          mkdir -p .build
 
           xcodebuild docbuild \
             -scheme WKViewportCoordinator \
