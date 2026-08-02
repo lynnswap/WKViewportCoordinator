@@ -22,6 +22,7 @@ concurrency:
 jobs:
   ios-tests:
     name: iOS Tests (${{ matrix.name }})
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -129,6 +130,12 @@ jobs:
           echo "Destination: ${DESTINATION}"
           echo "Resolved iOS: ${RESOLVED_IOS_VERSION}"
 
+      - name: Configure Simulator keyboard
+        run: |
+          # Keyboard viewport checks require the software keyboard regardless of runner host state.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          xcrun simctl shutdown "${SIMULATOR_UDID}" || true
+
       - name: Run package tests
         run: |
           DERIVED_DATA_PATH="${RUNNER_TEMP}/DerivedData"
@@ -164,7 +171,18 @@ jobs:
           rm -f "${RESULT_PIPE}" "${RESULT_JSON}"
           mkfifo "${RESULT_PIPE}"
 
-          ruby - "${RESULT_PIPE}" "${RESULT_JSON}" <<'RUBY' &
+          set +e
+          SIMCTL_CHILD_MINIBROWSER_SELF_TEST=viewport \
+            SIMCTL_CHILD_MINIBROWSER_SELF_TEST_RESULT_PATH="${RESULT_PIPE}" \
+            xcrun simctl launch --terminate-running-process "${SIMULATOR_UDID}" lynnpd.MiniBrowser
+          SELF_TEST_STATUS=$?
+          set -e
+
+          if [[ "${SELF_TEST_STATUS}" -ne 0 ]]; then
+            exit "${SELF_TEST_STATUS}"
+          fi
+
+          ruby - "${RESULT_PIPE}" "${RESULT_JSON}" <<'RUBY'
           require "json"
           require "timeout"
 
@@ -188,19 +206,3 @@ jobs:
             abort("MiniBrowser self-test emitted invalid JSON: #{error.message}")
           end
           RUBY
-          SELF_TEST_READER_PID=$!
-
-          set +e
-          SIMCTL_CHILD_MINIBROWSER_SELF_TEST=viewport \
-            SIMCTL_CHILD_MINIBROWSER_SELF_TEST_RESULT_PATH="${RESULT_PIPE}" \
-            xcrun simctl launch --terminate-running-process "${SIMULATOR_UDID}" lynnpd.MiniBrowser
-          SELF_TEST_STATUS=$?
-          set -e
-
-          if [[ "${SELF_TEST_STATUS}" -ne 0 ]]; then
-            kill "${SELF_TEST_READER_PID}" 2>/dev/null || true
-            wait "${SELF_TEST_READER_PID}" 2>/dev/null || true
-            exit "${SELF_TEST_STATUS}"
-          fi
-
-          wait "${SELF_TEST_READER_PID}"
