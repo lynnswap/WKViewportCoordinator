@@ -472,6 +472,8 @@ public final class ViewportCoordinator: NSObject {
     private var webViewStateCancellables: Set<AnyCancellable> = []
 #if DEBUG
     private var appliedViewportUpdateCount = 0
+    private var scrollEdgeEffectAssignmentCount = 0
+    private var contentScrollViewRegistrationCount = 0
 #endif
 
 #if DEBUG
@@ -489,6 +491,14 @@ public final class ViewportCoordinator: NSObject {
 
     var appliedViewportUpdateCountForTesting: Int {
         appliedViewportUpdateCount
+    }
+
+    var scrollEdgeEffectAssignmentCountForTesting: Int {
+        scrollEdgeEffectAssignmentCount
+    }
+
+    var contentScrollViewRegistrationCountForTesting: Int {
+        contentScrollViewRegistrationCount
     }
 
     var resolvedHostViewControllerForTesting: UIViewController? {
@@ -593,7 +603,10 @@ public final class ViewportCoordinator: NSObject {
         updateObservedHostViewControllerIfNeeded(hostViewController, webView: webView)
 
         applyScrollEdgeEffects(to: webView.scrollView)
-        hostViewController.setContentScrollView(webView.scrollView)
+        registerContentScrollViewIfNeeded(
+            webView.scrollView,
+            on: hostViewController
+        )
 
         let metricsHostView = resolvedMetricsHostView(webView: webView, hostViewController: hostViewController)
         var effectiveMetrics = metricsResolver.makeViewportMetrics(
@@ -681,11 +694,54 @@ public final class ViewportCoordinator: NSObject {
 
     private func applyScrollEdgeEffects(to scrollView: UIScrollView) {
         if #available(iOS 26.0, *) {
-            scrollView.topEdgeEffect.isHidden = scrollEdgeEffects.top.isHidden
-            scrollView.topEdgeEffect.style = scrollEdgeEffects.top.style.uiKitStyle
-            scrollView.bottomEdgeEffect.isHidden = scrollEdgeEffects.bottom.isHidden
-            scrollView.bottomEdgeEffect.style = scrollEdgeEffects.bottom.style.uiKitStyle
+            apply(
+                scrollEdgeEffects.top,
+                to: scrollView.topEdgeEffect
+            )
+            apply(
+                scrollEdgeEffects.bottom,
+                to: scrollView.bottomEdgeEffect
+            )
         }
+    }
+
+    @available(iOS 26.0, *)
+    private func apply(
+        _ configuration: ViewportScrollEdgeEffect,
+        to edgeEffect: UIScrollEdgeEffect
+    ) {
+        if edgeEffect.isHidden != configuration.isHidden {
+            edgeEffect.isHidden = configuration.isHidden
+#if DEBUG
+            scrollEdgeEffectAssignmentCount += 1
+#endif
+        }
+
+        let style = configuration.style.uiKitStyle
+        if edgeEffect.style != style {
+            edgeEffect.style = style
+#if DEBUG
+            scrollEdgeEffectAssignmentCount += 1
+#endif
+        }
+    }
+
+    private func registerContentScrollViewIfNeeded(
+        _ scrollView: UIScrollView,
+        on hostViewController: UIViewController
+    ) {
+        guard
+            hostViewController.contentScrollView(for: .top) !== scrollView
+                || hostViewController.contentScrollView(for: .bottom)
+                    !== scrollView
+        else {
+            return
+        }
+
+        hostViewController.setContentScrollView(scrollView)
+#if DEBUG
+        contentScrollViewRegistrationCount += 1
+#endif
     }
 
     private func installObservationViewIfPossible() {

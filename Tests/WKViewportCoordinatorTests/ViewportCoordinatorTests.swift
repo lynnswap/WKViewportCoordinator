@@ -1481,6 +1481,128 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorSkipsAlreadyRegisteredContentScrollView() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let initialContentScrollViewRegistrationCount =
+            coordinator.contentScrollViewRegistrationCountForTesting
+
+        coordinator.updateViewport()
+
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
+        #expect(
+            coordinator.contentScrollViewRegistrationCountForTesting
+                == initialContentScrollViewRegistrationCount
+        )
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorRestoresContentScrollViewWhenOneEdgeDrifts() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let replacementScrollView = UIScrollView()
+        hostViewController.setContentScrollView(replacementScrollView, for: .top)
+        let registrationCountBeforeRecovery =
+            coordinator.contentScrollViewRegistrationCountForTesting
+
+        #expect(hostViewController.contentScrollView(for: .top) === replacementScrollView)
+        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
+
+        coordinator.updateViewport()
+
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
+        #expect(
+            coordinator.contentScrollViewRegistrationCountForTesting
+                == registrationCountBeforeRecovery + 1
+        )
+        coordinator.invalidate()
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func coordinatorSkipsAlreadyAppliedScrollEdgeEffects() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let initialEdgeEffectAssignmentCount =
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+        let unchangedScrollEdgeEffects = coordinator.scrollEdgeEffects
+
+        coordinator.updateViewport()
+        coordinator.scrollEdgeEffects = unchangedScrollEdgeEffects
+
+        #expect(
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+                == initialEdgeEffectAssignmentCount
+        )
+        coordinator.invalidate()
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func coordinatorRestoresExternallyChangedScrollEdgeEffectProperties() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        coordinator.scrollEdgeEffects = ViewportScrollEdgeEffects(
+            top: ViewportScrollEdgeEffect(isHidden: false, style: .soft),
+            bottom: ViewportScrollEdgeEffect(isHidden: true, style: .automatic)
+        )
+
+        webView.scrollView.topEdgeEffect.isHidden = true
+        webView.scrollView.bottomEdgeEffect.style = .hard
+        let assignmentCountBeforeRecovery =
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+
+        coordinator.updateViewport()
+
+        #expect(webView.scrollView.topEdgeEffect.isHidden == false)
+        #expect(webView.scrollView.bottomEdgeEffect.style == .automatic)
+        #expect(
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+                == assignmentCountBeforeRecovery + 2
+        )
+        coordinator.invalidate()
+    }
+
+    @Test
     @available(iOS 26.0, *)
     func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate() {
         let hostViewController = UIViewController()
