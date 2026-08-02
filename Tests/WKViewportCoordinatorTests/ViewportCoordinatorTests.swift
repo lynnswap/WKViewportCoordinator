@@ -1482,6 +1482,40 @@ struct ViewportCoordinatorTests {
 
     @Test
     @available(iOS 26.0, *)
+    func coordinatorSkipsAlreadyAppliedScrollEdgeAndContentScrollViewState() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let initialEdgeEffectAssignmentCount =
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+        let initialContentScrollViewRegistrationCount =
+            coordinator.contentScrollViewRegistrationCountForTesting
+        let unchangedScrollEdgeEffects = coordinator.scrollEdgeEffects
+
+        coordinator.updateViewport()
+        coordinator.scrollEdgeEffects = unchangedScrollEdgeEffects
+
+        #expect(
+            coordinator.scrollEdgeEffectAssignmentCountForTesting
+                == initialEdgeEffectAssignmentCount
+        )
+        #expect(
+            coordinator.contentScrollViewRegistrationCountForTesting
+                == initialContentScrollViewRegistrationCount
+        )
+        coordinator.invalidate()
+    }
+
+    @Test
+    @available(iOS 26.0, *)
     func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
