@@ -447,6 +447,11 @@ final class MiniBrowserHarnessState {
             throw PageMetricsError.fixtureNotLoaded
         }
 
+        // DOM focus alone can succeed without starting a keyboard input session.
+        guard webView.becomeFirstResponder() else {
+            throw PageMetricsError.focusFailed("web view could not become first responder")
+        }
+
         let rawJSON = try await callAsyncJavaScriptString(
             "return window.testHarness.focusInput('bottom-input');"
         )
