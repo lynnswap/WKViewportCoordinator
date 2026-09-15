@@ -222,11 +222,11 @@ struct ResolvedViewportMetrics: Equatable {
 
 struct AppliedViewportState: Equatable {
     let resolvedMetrics: ResolvedViewportMetrics
-    let contentScrollInsetFallback: UIEdgeInsets?
+    let contentScrollInset: UIEdgeInsets?
     let legacyLayoutViewportSize: CGSize?
 
     static func == (lhs: AppliedViewportState, rhs: AppliedViewportState) -> Bool {
-        guard lhs.contentScrollInsetFallback == rhs.contentScrollInsetFallback else {
+        guard lhs.contentScrollInset == rhs.contentScrollInset else {
             return false
         }
 
@@ -247,19 +247,19 @@ final class ViewportMetricsResolver {
         in hostViewController: UIViewController,
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat
+        inputAccessoryOverlapHeight: CGFloat,
+        includesNavigationBarInObscuredInsets: Bool = true
     ) -> ViewportMetrics {
         let hostView = webView.superview ?? hostViewController.viewIfLoaded
         let viewportSafeAreaInsets = projectedWindowSafeAreaInsets(in: hostView)
         let legacyFallbackSafeAreaInsets = hostView?.safeAreaInsets ?? .zero
-        let topObscuredHeight = max(
-            viewportSafeAreaInsets.top,
-            topEdgeObscuredHeight(
+        let topObscuredHeight = includesNavigationBarInObscuredInsets
+            ? max(viewportSafeAreaInsets.top, topEdgeObscuredHeight(
                 of: hostViewController.navigationController?.navigationBar,
                 in: hostView,
                 extendingFrom: viewportSafeAreaInsets.top
-            )
-        )
+            ))
+            : viewportSafeAreaInsets.top
         let bottomObscuredHeight = bottomEdgeObscuredHeight(
             of: [
                 hostViewController.tabBarController?.tabBar,
@@ -412,6 +412,11 @@ final class ViewportMetricsResolver {
 }
 
 /// Coordinates a `WKWebView` viewport with UIKit safe areas, visible chrome, keyboard, and input accessory geometry.
+///
+/// With `contentInsetAdjustmentBehavior` set to `.never`, the coordinator supplies
+/// the scroll view's content insets. On iOS 26 and later, these match the obscured
+/// content insets, including keyboard and input accessory overlap. Use
+/// ``additionalObscuredContentInsets`` for client-managed UI in this mode.
 @MainActor
 public final class ViewportCoordinator: NSObject {
     /// The view controller that hosts the web view.
@@ -419,8 +424,7 @@ public final class ViewportCoordinator: NSObject {
     /// If this value is `nil`, the coordinator resolves a host from the web view's responder chain or window root.
     public weak var hostViewController: UIViewController? {
         didSet {
-            lastAppliedViewportState = nil
-            updateViewport()
+            updateViewport(force: true)
         }
     }
 
@@ -429,6 +433,19 @@ public final class ViewportCoordinator: NSObject {
 
     /// The safe area edges that should affect obscured content inset calculations.
     public var obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom] {
+        didSet {
+            updateViewport()
+        }
+    }
+
+    /// Whether a visible navigation bar contributes to the obscured content insets.
+    ///
+    /// The default is `true`. Set this to `false` when the web content already reserves
+    /// space for the navigation bar. Window safe-area, bottom-bar, keyboard, input-accessory,
+    /// and additional obscured insets are preserved. Set the scroll view's
+    /// `contentInsetAdjustmentBehavior` to `.never` to also exclude UIKit's automatic
+    /// navigation-bar adjustment. The coordinator does not change that property.
+    public var includesNavigationBarInObscuredInsets = true {
         didSet {
             updateViewport()
         }
@@ -559,17 +576,20 @@ public final class ViewportCoordinator: NSObject {
         if let currentScreen {
             lastKnownWindowScreen = currentScreen
         }
-        updateViewport()
+        updateViewport(force: true)
     }
 
     /// Refreshes viewport state after the web view's safe area insets change.
     public func webViewSafeAreaInsetsDidChange() {
-        lastAppliedViewportState = nil
-        updateViewport()
+        updateViewport(force: true)
     }
 
     /// Recomputes and applies the current viewport state.
     public func updateViewport() {
+        updateViewport(force: false)
+    }
+
+    private func updateViewport(force: Bool) {
         guard let webView else {
             return
         }
@@ -613,7 +633,8 @@ public final class ViewportCoordinator: NSObject {
             in: hostViewController,
             webView: webView,
             keyboardOverlapHeight: keyboardOverlapHeight(in: metricsHostView),
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: metricsHostView)
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: metricsHostView),
+            includesNavigationBarInObscuredInsets: includesNavigationBarInObscuredInsets
         )
         effectiveMetrics.obscuredContentInsetEdgesAffectedBySafeArea = obscuredContentInsetEdgesAffectedBySafeArea
         effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
@@ -628,29 +649,41 @@ public final class ViewportCoordinator: NSObject {
             contentInsetAdjustmentBehavior: webView.scrollView.contentInsetAdjustmentBehavior,
             screenScale: screenScale
         )
-        let contentScrollInsetFallback: UIEdgeInsets?
+        let contentScrollInset: UIEdgeInsets?
         let legacyLayoutViewportSize: CGSize?
         if #available(iOS 26.0, *) {
-            contentScrollInsetFallback = nil
+            contentScrollInset = resolvedMetrics.contentInsetAdjustmentBehavior == .never
+                ? resolvedMetrics.obscuredInsets : nil
             legacyLayoutViewportSize = nil
         } else {
-            contentScrollInsetFallback = resolvedMetrics.contentScrollInsetFallback
+            contentScrollInset = resolvedMetrics.contentScrollInsetFallback
             legacyLayoutViewportSize = resolvedMetrics.legacyLayoutViewportSize(in: webView.bounds)
         }
         let appliedViewportState = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: contentScrollInsetFallback,
+            contentScrollInset: contentScrollInset,
             legacyLayoutViewportSize: legacyLayoutViewportSize
         )
-        guard appliedViewportState != lastAppliedViewportState else {
+        guard force || appliedViewportState != lastAppliedViewportState else {
             return
         }
 
+        let previousContentScrollInset = lastAppliedViewportState?.contentScrollInset
         lastAppliedViewportState = appliedViewportState
 #if DEBUG
         appliedViewportUpdateCount += 1
 #endif
         if #available(iOS 26.0, *) {
+            // WebKit takes the maximum of its obscured inset and UIKit's system
+            // inset when sizing the layout viewport. They must describe the same
+            // geometry when UIKit's automatic adjustment is disabled.
+            if let contentScrollInset {
+                if webView.scrollView.contentInset != contentScrollInset {
+                    webView.scrollView.contentInset = contentScrollInset
+                }
+            } else if previousContentScrollInset != nil {
+                webView.scrollView.contentInset = .zero
+            }
             webView.obscuredContentInsets = resolvedMetrics.obscuredInsets
             ViewportSPIBridge.apply(
                 unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
@@ -670,6 +703,9 @@ public final class ViewportCoordinator: NSObject {
     }
 
     /// Stops observation and resets the viewport state applied to the web view.
+    ///
+    /// Content insets supplied while automatic adjustment was disabled are reset
+    /// to zero. The scroll view's content inset adjustment behavior is preserved.
     public func invalidate() {
         tearDownViewportCoordination(resetViewport: true)
     }
@@ -806,7 +842,6 @@ public final class ViewportCoordinator: NSObject {
             webView: webView
         )
         observedHostViewController = nil
-        lastAppliedViewportState = nil
         clearObservationViewIfNeeded()
     }
 
@@ -820,6 +855,9 @@ public final class ViewportCoordinator: NSObject {
 
     private func resetAppliedViewportInsets(on webView: WKWebView) {
         if #available(iOS 26.0, *) {
+            if lastAppliedViewportState?.contentScrollInset != nil {
+                webView.scrollView.contentInset = .zero
+            }
             webView.obscuredContentInsets = .zero
             ViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: webView)
             ViewportSPIBridge.apply(obscuredSafeAreaEdges: [], to: webView)
@@ -901,8 +939,7 @@ public final class ViewportCoordinator: NSObject {
     }
 
     private func handleObservedWebViewStateChange() {
-        lastAppliedViewportState = nil
-        updateViewport()
+        updateViewport(force: true)
     }
 
 #if DEBUG
