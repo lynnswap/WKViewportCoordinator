@@ -87,6 +87,8 @@ struct ManagedViewportWebViewTests {
         hostViewController.view.layoutIfNeeded()
 
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        #expect(webView.viewportIncludesNavigationBarInObscuredInsets)
+        webView.viewportIncludesNavigationBarInObscuredInsets = false
         webView.viewportObscuredContentInsetEdgesAffectedBySafeArea = [.bottom]
         webView.viewportAdditionalObscuredContentInsets = UIEdgeInsets(top: -8, left: -4, bottom: 12, right: 6)
         webView.viewportBottomBarObscurationBehavior = .ignoreWhenKeyboardOrAccessoryOverlaps
@@ -99,6 +101,7 @@ struct ManagedViewportWebViewTests {
         let resolvedMetrics = try #require(coordinator.resolvedMetricsForTesting)
 
         #expect(coordinator.obscuredContentInsetEdgesAffectedBySafeArea == [.bottom])
+        #expect(coordinator.includesNavigationBarInObscuredInsets == false)
         #expect(
             coordinator.additionalObscuredContentInsets
                 == UIEdgeInsets(top: 0, left: 0, bottom: 12, right: 6)
@@ -118,6 +121,9 @@ struct ManagedViewportWebViewTests {
         #expect(resolvedMetrics.obscuredInsets.left == 0)
         #expect(resolvedMetrics.obscuredInsets.right == 6)
         #expect(resolvedMetrics.obscuredInsets.bottom >= 12)
+
+        webView.viewportIncludesNavigationBarInObscuredInsets = true
+        #expect(coordinator.includesNavigationBarInObscuredInsets)
     }
 }
 

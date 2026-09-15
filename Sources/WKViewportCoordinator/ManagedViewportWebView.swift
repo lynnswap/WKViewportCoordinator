@@ -23,6 +23,16 @@ public final class ManagedViewportWebView: WKWebView {
         }
     }
 
+    /// Whether a visible navigation bar contributes to the obscured content insets.
+    ///
+    /// The default is `true`. See ``ViewportCoordinator/includesNavigationBarInObscuredInsets``.
+    public var viewportIncludesNavigationBarInObscuredInsets = true {
+        didSet {
+            viewportCoordinator?.includesNavigationBarInObscuredInsets =
+                viewportIncludesNavigationBarInObscuredInsets
+        }
+    }
+
     /// Additional obscured content insets contributed by client-managed UI.
     ///
     /// Negative values are treated as zero.
@@ -112,6 +122,8 @@ public final class ManagedViewportWebView: WKWebView {
         )
         viewportCoordinator?.obscuredContentInsetEdgesAffectedBySafeArea =
             viewportObscuredContentInsetEdgesAffectedBySafeArea
+        viewportCoordinator?.includesNavigationBarInObscuredInsets =
+            viewportIncludesNavigationBarInObscuredInsets
         viewportCoordinator?.additionalObscuredContentInsets = storedViewportAdditionalObscuredContentInsets
         viewportCoordinator?.bottomBarObscurationBehavior = viewportBottomBarObscurationBehavior
         viewportCoordinator?.scrollEdgeEffects = viewportScrollEdgeEffects

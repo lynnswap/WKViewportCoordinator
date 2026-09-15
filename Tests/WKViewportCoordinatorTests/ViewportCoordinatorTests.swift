@@ -115,6 +115,108 @@ struct ViewportCoordinatorTests {
         )
     }
 
+    @Test(arguments: [(CGFloat(0), CGFloat(0)), (CGFloat(300), CGFloat(344))])
+    func excludingNavigationBarPreservesSafeAreaAndBottomObscuration(
+        keyboardHeight: CGFloat,
+        accessoryHeight: CGFloat
+    ) throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        let tabBarController = UITabBarController()
+        tabBarController.setViewControllers([navigationController], animated: false)
+        let window = makeWindow(rootViewController: tabBarController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.frame = window.bounds
+        hostViewController.view.layoutIfNeeded()
+        let resolver = ViewportMetricsResolver()
+        let included = resolver.makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: keyboardHeight,
+            inputAccessoryOverlapHeight: accessoryHeight
+        )
+        let excluded = resolver.makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: keyboardHeight,
+            inputAccessoryOverlapHeight: accessoryHeight,
+            includesNavigationBarInObscuredInsets: false
+        )
+
+        #expect(included.topObscuredHeight > included.safeArea.viewport.top)
+        #expect(excluded.topObscuredHeight == excluded.safeArea.viewport.top)
+        #expect(excluded.safeArea == included.safeArea)
+        #expect(excluded.bottomObscuredHeight == included.bottomObscuredHeight)
+        #expect(excluded.bottomObscuredHeight > excluded.safeArea.viewport.bottom)
+        #expect(excluded.keyboardOverlapHeight == keyboardHeight)
+        #expect(excluded.inputAccessoryOverlapHeight == accessoryHeight)
+        #expect(excluded.finalObscuredInsets.bottom == included.finalObscuredInsets.bottom)
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func navigationBarObscurationCanChangeWithoutChangingOtherViewportOptions() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.frame = window.bounds
+        hostViewController.view.layoutIfNeeded()
+        let coordinator = ViewportCoordinator(hostViewController: hostViewController, webView: webView)
+        defer { coordinator.invalidate() }
+        coordinator.additionalObscuredContentInsets = UIEdgeInsets(top: 7, left: 3, bottom: 11, right: 5)
+        coordinator.scrollEdgeEffects = ViewportScrollEdgeEffects(
+            top: ViewportScrollEdgeEffect(isHidden: true, style: .hard),
+            bottom: ViewportScrollEdgeEffect(isHidden: false, style: .soft)
+        )
+        let included = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(coordinator.includesNavigationBarInObscuredInsets)
+        #expect(included.obscuredInsets.top > included.viewportSafeAreaInsets.top + 7)
+
+        coordinator.includesNavigationBarInObscuredInsets = false
+        let excluded = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(excluded.obscuredInsets.top == excluded.viewportSafeAreaInsets.top + 7)
+        #expect(webView.obscuredContentInsets == excluded.obscuredInsets)
+        #expect(webView.scrollView.contentInset == excluded.obscuredInsets)
+        #expect(webView.scrollView.adjustedContentInset == excluded.obscuredInsets)
+        #expect(excluded.obscuredInsets.left == included.obscuredInsets.left)
+        #expect(excluded.obscuredInsets.bottom == included.obscuredInsets.bottom)
+        #expect(excluded.obscuredInsets.right == included.obscuredInsets.right)
+
+        for hidden in [true, false] {
+            navigationController.setNavigationBarHidden(hidden, animated: false)
+            navigationController.view.layoutIfNeeded()
+            hostViewController.view.layoutIfNeeded()
+            coordinator.updateViewport()
+            let updated = try #require(coordinator.resolvedMetricsForTesting)
+            #expect(updated.obscuredInsets.top == excluded.obscuredInsets.top)
+            #expect(webView.obscuredContentInsets.top == excluded.obscuredInsets.top)
+            #expect(webView.scrollView.adjustedContentInset.top == excluded.obscuredInsets.top)
+        }
+
+        coordinator.includesNavigationBarInObscuredInsets = true
+        let restored = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(restored.obscuredInsets == included.obscuredInsets)
+        #expect(webView.scrollView.contentInsetAdjustmentBehavior == .never)
+        #expect(webView.scrollView.topEdgeEffect.isHidden)
+        #expect(webView.scrollView.topEdgeEffect.style == .hard)
+        #expect(webView.scrollView.bottomEdgeEffect.isHidden == false)
+        #expect(webView.scrollView.bottomEdgeEffect.style == .soft)
+    }
+
     @Test
     func viewportMetricsResolverIgnoresNavigationBarThatDoesNotReachTopEdge() throws {
         let hostViewController = UIViewController()
@@ -605,6 +707,120 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    @available(iOS 26.0, *)
+    func modernNeverInsetsAreReleasedWhenAutomaticAdjustmentResumes() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
+        let customInset = UIEdgeInsets(top: 9, left: 3, bottom: 7, right: 5)
+        webView.scrollView.contentInset = customInset
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let automaticCoordinator = ViewportCoordinator(webView: webView)
+        #expect(webView.scrollView.contentInset == customInset)
+        automaticCoordinator.invalidate()
+        #expect(webView.scrollView.contentInset == customInset)
+
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let coordinator = ViewportCoordinator(webView: webView)
+        let managedInset = try #require(coordinator.resolvedMetricsForTesting).obscuredInsets
+        #expect(managedInset.top > 0)
+        #expect(webView.scrollView.contentInset == managedInset)
+        #expect(webView.scrollView.adjustedContentInset == managedInset)
+
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
+        coordinator.updateViewport()
+        #expect(webView.scrollView.contentInset == .zero)
+        #expect(webView.scrollView.contentInsetAdjustmentBehavior == .always)
+
+        webView.scrollView.contentInset = customInset
+        coordinator.invalidate()
+        #expect(webView.scrollView.contentInset == customInset)
+    }
+
+    @Test(arguments: [false, true])
+    @available(iOS 26.0, *)
+    func modernNeverInsetsSurviveDetachmentAndResetOnInvalidate(changeAdjustmentWhileDetached: Bool) throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let constraints = attach(webView, to: hostViewController.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let managedInset = try #require(coordinator.resolvedMetricsForTesting).obscuredInsets
+        #expect(managedInset.top > 0)
+        NSLayoutConstraint.deactivate(constraints)
+        let orphanContainer = UIView()
+        attach(webView, to: orphanContainer)
+        coordinator.webViewHierarchyDidChange()
+        if changeAdjustmentWhileDetached {
+            webView.scrollView.contentInsetAdjustmentBehavior = .always
+            coordinator.updateViewport()
+        }
+        #expect(webView.scrollView.contentInset == managedInset)
+        #expect(webView.obscuredContentInsets == managedInset)
+
+        coordinator.invalidate()
+        #expect(webView.scrollView.contentInset == .zero)
+        #expect(webView.obscuredContentInsets == .zero)
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func modernNeverInsetsFollowKeyboardAndAccessoryGeometry() throws {
+        let hostViewController = UIViewController()
+        let webView = InputAccessoryReportingWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        defer { coordinator.invalidate() }
+        let baseline = webView.scrollView.contentInset
+        let keyboardFrame = window.convert(
+            CGRect(x: 0, y: window.bounds.maxY - 260, width: window.bounds.width, height: 260),
+            to: window.screen.coordinateSpace
+        )
+        NotificationCenter.default.post(
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: keyboardFrame)]
+        )
+        #expect(webView.obscuredContentInsets.bottom == 260)
+        #expect(webView.scrollView.contentInset == webView.obscuredContentInsets)
+
+        webView.reportedInputViewBoundsInWindow = CGRect(
+            x: 0, y: window.bounds.maxY - 304, width: window.bounds.width, height: 304
+        )
+        coordinator.updateViewport()
+        #expect(webView.obscuredContentInsets.bottom == 304)
+        #expect(webView.scrollView.contentInset == webView.obscuredContentInsets)
+
+        webView.reportedInputViewBoundsInWindow = .null
+        NotificationCenter.default.post(
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: keyboardFrame)]
+        )
+        #expect(webView.scrollView.contentInset == baseline)
+        #expect(webView.scrollView.contentInset == webView.obscuredContentInsets)
+    }
+
+    @Test
     func coordinatorRefreshesWhenScrollViewAdjustmentBehaviorChanges() async throws {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -916,7 +1132,7 @@ struct ViewportCoordinatorTests {
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
         #expect(coordinator.observationSuperviewForTesting == nil)
-        #expect(coordinator.resolvedMetricsForTesting == nil)
+        #expect(coordinator.resolvedMetricsForTesting != nil)
         coordinator.invalidate()
     }
 
@@ -1251,12 +1467,12 @@ struct ViewportCoordinatorTests {
 
         let first = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: .zero,
+            contentScrollInset: .zero,
             legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
         let second = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: UIEdgeInsets(top: 1, left: 0, bottom: 0, right: 0),
+            contentScrollInset: UIEdgeInsets(top: 1, left: 0, bottom: 0, right: 0),
             legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
 
@@ -1283,12 +1499,12 @@ struct ViewportCoordinatorTests {
 
         let first = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: resolvedMetrics.contentScrollInsetFallback,
+            contentScrollInset: resolvedMetrics.contentScrollInsetFallback,
             legacyLayoutViewportSize: CGSize(width: 390, height: 653)
         )
         let second = AppliedViewportState(
             resolvedMetrics: resolvedMetrics,
-            contentScrollInsetFallback: resolvedMetrics.contentScrollInsetFallback,
+            contentScrollInset: resolvedMetrics.contentScrollInsetFallback,
             legacyLayoutViewportSize: CGSize(width: 390, height: 640)
         )
 
@@ -1330,12 +1546,12 @@ struct ViewportCoordinatorTests {
 
         let first = AppliedViewportState(
             resolvedMetrics: firstResolvedMetrics,
-            contentScrollInsetFallback: nil,
+            contentScrollInset: nil,
             legacyLayoutViewportSize: nil
         )
         let second = AppliedViewportState(
             resolvedMetrics: secondResolvedMetrics,
-            contentScrollInsetFallback: nil,
+            contentScrollInset: nil,
             legacyLayoutViewportSize: nil
         )
 
@@ -1602,11 +1818,12 @@ struct ViewportCoordinatorTests {
         coordinator.invalidate()
     }
 
-    @Test
+    @Test(arguments: [false, true])
     @available(iOS 26.0, *)
-    func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate() {
+    func coordinatorDeinitClearsAppliedViewportStateWithoutExplicitInvalidate(usesManualInsets: Bool) {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
+        webView.scrollView.contentInsetAdjustmentBehavior = usesManualInsets ? .never : .always
         attach(webView, to: hostViewController.view)
 
         let window = makeWindow(rootViewController: hostViewController)
@@ -1620,11 +1837,15 @@ struct ViewportCoordinatorTests {
             let coordinator = ViewportCoordinator(webView: webView)
             releasedCoordinator = coordinator
             #expect(webView.obscuredContentInsets.top > 0)
+            if usesManualInsets {
+                #expect(webView.scrollView.contentInset == webView.obscuredContentInsets)
+            }
             #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         }
 
         #expect(releasedCoordinator == nil)
         #expect(webView.obscuredContentInsets == .zero)
+        #expect(webView.scrollView.contentInset == .zero)
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
     }
