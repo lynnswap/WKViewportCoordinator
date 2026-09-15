@@ -1,0 +1,5 @@
+# actionlint v1.7.12 does not yet recognize this GitHub-hosted preview runner.
+# https://github.com/actions/runner-images/issues/14404
+self-hosted-runner:
+  labels:
+    - xcode-27

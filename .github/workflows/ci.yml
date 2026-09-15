@@ -37,6 +37,11 @@ jobs:
             xcode_channel: stable
             xcode_major: '26'
             ios_major: '26'
+          - name: iOS 27 latest
+            runner: xcode-27
+            xcode_channel: latest
+            xcode_major: '27'
+            ios_major: '27'
     runs-on: ${{ matrix.runner }}
     env:
       XCODE_CHANNEL: ${{ matrix.xcode_channel }}
@@ -67,7 +72,7 @@ jobs:
           end
 
           candidates = candidates.select do |path|
-            channel == "prerelease" ? prerelease_xcode_path?(path) : !prerelease_xcode_path?(path)
+            channel == "latest" || (channel == "prerelease" ? prerelease_xcode_path?(path) : !prerelease_xcode_path?(path))
           end
 
           def version_components(path)
