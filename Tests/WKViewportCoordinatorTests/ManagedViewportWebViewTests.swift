@@ -5,7 +5,7 @@ import WebKit
 @testable import WKViewportCoordinator
 
 @MainActor
-struct ManagedViewportWebViewTests {
+extension ViewportCoordinatorTests {
     @Test
     func managedViewportWebViewFindsHostViewControllerAutomatically() {
         let hostViewController = UIViewController()

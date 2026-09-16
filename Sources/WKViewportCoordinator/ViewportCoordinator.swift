@@ -480,7 +480,7 @@ public final class ViewportCoordinator: NSObject {
     private weak var observedHostViewController: UIViewController?
     private var webViewStateCancellables: Set<AnyCancellable> = []
 #if DEBUG
-    private var appliedViewportUpdateCount = 0
+    @objc dynamic private(set) var appliedViewportUpdateCountForTesting = 0
     private var scrollEdgeEffectAssignmentCount = 0
     private var contentScrollViewRegistrationCount = 0
 #endif
@@ -496,10 +496,6 @@ public final class ViewportCoordinator: NSObject {
 
     var hasObservationViewForTesting: Bool {
         observationView != nil
-    }
-
-    var appliedViewportUpdateCountForTesting: Int {
-        appliedViewportUpdateCount
     }
 
     var scrollEdgeEffectAssignmentCountForTesting: Int {
@@ -662,9 +658,6 @@ public final class ViewportCoordinator: NSObject {
 
         let previousContentScrollInset = lastAppliedViewportState?.contentScrollInset
         lastAppliedViewportState = appliedViewportState
-#if DEBUG
-        appliedViewportUpdateCount += 1
-#endif
         if #available(iOS 26.0, *) {
             // WebKit takes the maximum of its obscured inset and UIKit's system
             // inset when sizing the layout viewport. They must describe the same
@@ -692,6 +685,9 @@ public final class ViewportCoordinator: NSObject {
                 webView: webView
             )
         }
+#if DEBUG
+        appliedViewportUpdateCountForTesting += 1
+#endif
     }
 
     /// Stops observation and resets the viewport state applied to the web view.

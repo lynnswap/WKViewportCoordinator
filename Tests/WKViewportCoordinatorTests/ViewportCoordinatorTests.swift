@@ -3,6 +3,7 @@ import Testing
 import SwiftUI
 import UIKit
 import WebKit
+import XCTest
 @testable import WKViewportCoordinator
 
 @Suite(.serialized)
@@ -873,19 +874,15 @@ struct ViewportCoordinatorTests {
 
         let coordinator = ViewportCoordinator(webView: webView)
         let initialMetrics = try #require(coordinator.resolvedMetricsForTesting)
-        let initialUpdateCount = coordinator.appliedViewportUpdateCountForTesting
         #expect(initialMetrics.contentInsetAdjustmentBehavior != .never)
 
+        let update = XCTKVOExpectation(
+            keyPath: #keyPath(ViewportCoordinator.appliedViewportUpdateCountForTesting),
+            object: coordinator
+        )
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        for _ in 0..<10 {
-            if let metrics = coordinator.resolvedMetricsForTesting,
-               coordinator.appliedViewportUpdateCountForTesting > initialUpdateCount,
-               metrics.contentInsetAdjustmentBehavior == .never,
-               metrics.contentScrollInsetFallback.top == metrics.obscuredInsets.top {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        let result = await XCTWaiter.fulfillment(of: [update], timeout: 10)
+        try #require(result == .completed)
 
         let updatedMetrics = try #require(coordinator.resolvedMetricsForTesting)
         #expect(updatedMetrics.contentInsetAdjustmentBehavior == .never)
@@ -966,7 +963,8 @@ struct ViewportCoordinatorTests {
         }
 
         hostingController.view.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(10))
+        let result = await XCTWaiter.fulfillment(of: [box.attachedToWindow], timeout: 10)
+        try #require(result == .completed)
 
         let containerView = try #require(box.view)
         let coordinator = ViewportCoordinator(webView: webView)
@@ -1672,7 +1670,7 @@ struct ViewportCoordinatorTests {
 
     @Test
     @available(iOS 26.0, *)
-    func coordinatorKeepsAppliedObscuredInsetsUntilInvalidateWhenWebViewDetaches() async throws {
+    func coordinatorKeepsAppliedObscuredInsetsUntilInvalidateWhenWebViewDetaches() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         let constraints = attach(webView, to: hostViewController.view)
@@ -1690,7 +1688,6 @@ struct ViewportCoordinatorTests {
         let orphanContainer = UIView()
         attach(webView, to: orphanContainer)
         coordinator.webViewHierarchyDidChange()
-        try await Task.sleep(for: .milliseconds(10))
 
         #expect(webView.obscuredContentInsets.top > 0)
         #expect(hostViewController.contentScrollView(for: .top) == nil)
@@ -2380,6 +2377,20 @@ private final class TestViewportSPIObjectWithInternalSelectorsAndMaximumOnlyOver
 @MainActor
 private final class ContainerViewBox {
     var view: UIView?
+    let attachedToWindow = XCTestExpectation(description: "SwiftUI container attached to window")
+}
+
+@MainActor
+private final class HostingContainerView: UIView {
+    weak var box: ContainerViewBox?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            box?.view = self
+            box?.attachedToWindow.fulfill()
+        }
+    }
 }
 
 @MainActor
@@ -2452,8 +2463,8 @@ private struct HostingWebViewRepresentable: UIViewRepresentable {
     let box: ContainerViewBox
 
     func makeUIView(context: Context) -> UIView {
-        let containerView = UIView()
-        box.view = containerView
+        let containerView = HostingContainerView()
+        containerView.box = box
         attach(webView, to: containerView)
         return containerView
     }
