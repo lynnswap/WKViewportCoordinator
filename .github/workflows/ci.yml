@@ -22,7 +22,7 @@ concurrency:
 jobs:
   ios-tests:
     name: iOS Tests (${{ matrix.name }})
-    timeout-minutes: 10
+    timeout-minutes: ${{ matrix.ios_major == '27' && 20 || 10 }}
     strategy:
       fail-fast: false
       matrix:
