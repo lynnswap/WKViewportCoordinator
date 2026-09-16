@@ -160,11 +160,6 @@ final class MiniBrowserHarnessState {
         var bottomWithinViewport: Bool
         var fixedBottomWithinViewport: Bool
         var errorMessage: String?
-        var reportReason: String? = nil
-        var reportSequence: Int? = nil
-        var reportPhase: String? = nil
-        var reportStableSampleCount: Int? = nil
-        var reportFrameCount: Int? = nil
 
         static let idle = Self(
             status: "idle",
@@ -179,12 +174,7 @@ final class MiniBrowserHarnessState {
             viewportHeight: -1,
             bottomWithinViewport: false,
             fixedBottomWithinViewport: false,
-            errorMessage: nil,
-            reportReason: nil,
-            reportSequence: nil,
-            reportPhase: nil,
-            reportStableSampleCount: nil,
-            reportFrameCount: nil
+            errorMessage: nil
         )
     }
 
@@ -196,7 +186,6 @@ final class MiniBrowserHarnessState {
     let selfTestMode: SelfTestMode?
     private let selfTestInputDelegate: MiniBrowserSelfTestInputDelegate?
     private let selfTestInputDelegateInstalled: Bool
-    private let viewportScriptMessageHandler: MiniBrowserViewportScriptMessageHandler?
     private(set) var scenario: Scenario
     private(set) var chromeMode: ChromeMode
     private(set) var isAttached = true
@@ -209,15 +198,8 @@ final class MiniBrowserHarnessState {
         let initialChromeMode = ChromeMode(rawValue: processInfo.environment["MINIBROWSER_CHROME_MODE"] ?? "") ?? .navigationBarHidden
         let selfTestMode = SelfTestMode(rawValue: processInfo.environment["MINIBROWSER_SELF_TEST"] ?? "")
         let selfTestInputDelegate = selfTestMode == .viewport ? MiniBrowserSelfTestInputDelegate() : nil
-        let viewportScriptMessageHandler = selfTestMode == .viewport ? MiniBrowserViewportScriptMessageHandler() : nil
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        if let viewportScriptMessageHandler {
-            configuration.userContentController.add(
-                viewportScriptMessageHandler,
-                name: MiniBrowserViewportScriptMessageHandler.name
-            )
-        }
         let webView = ManagedViewportWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
@@ -229,19 +211,10 @@ final class MiniBrowserHarnessState {
         self.selfTestMode = selfTestMode
         self.selfTestInputDelegate = selfTestInputDelegate
         self.selfTestInputDelegateInstalled = selfTestInputDelegateInstalled
-        self.viewportScriptMessageHandler = viewportScriptMessageHandler
         scenario = initialScenario
         chromeMode = initialChromeMode
         nativeMetrics = NativeMetrics.idle(for: initialScenario, chromeMode: initialChromeMode)
         applyViewportBehavior(for: initialScenario)
-    }
-
-    isolated deinit {
-        if viewportScriptMessageHandler != nil {
-            webView.configuration.userContentController.removeScriptMessageHandler(
-                forName: MiniBrowserViewportScriptMessageHandler.name
-            )
-        }
     }
 
     private static func installSelfTestInputDelegate(_ inputDelegate: MiniBrowserSelfTestInputDelegate, on webView: WKWebView) -> Bool {
@@ -397,38 +370,22 @@ final class MiniBrowserHarnessState {
     }
 
     @discardableResult
-    func refreshPageMetrics(
-        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil,
-        afterRenderingUpdate: Bool = false
-    ) async throws -> PageMetrics {
+    func refreshPageMetrics() async throws -> PageMetrics {
         guard fixtureLoaded else {
             setPageMetricsLoading()
             throw PageMetricsError.fixtureNotLoaded
         }
 
-        let script: String
-        if let previousViewportHeight {
-            script = "return window.testHarness.captureStateAfterViewportChange(\(previousViewportHeight));"
-        } else if afterRenderingUpdate {
-            script = "return window.testHarness.captureStateAfterRenderingUpdate();"
-        } else {
-            script = "return window.testHarness.captureState();"
-        }
-        let rawJSON = try await callAsyncJavaScriptString(script)
+        // Native screen updates and DOM layout have separate completion boundaries.
+        // captureState waits for WebContent layout after the snapshot incorporates native updates.
+        let configuration = WKSnapshotConfiguration()
+        configuration.afterScreenUpdates = true
+        configuration.snapshotWidth = 1
+        _ = try await webView.takeSnapshot(configuration: configuration)
+        let rawJSON = try await callAsyncJavaScriptString("return window.testHarness.captureState();")
         let metrics = try decodePageMetrics(from: rawJSON)
         pageMetrics = metrics
         return metrics
-    }
-
-    @discardableResult
-    func refreshPageMetricsFromScriptMessage(reason: String) async throws -> PageMetrics {
-        let report = try await requestViewportScriptReport(
-            reason: reason,
-            scriptBuilder: { reasonLiteral, sequence in
-                "return await window.testHarness.reportSettledState(\(reasonLiteral), \(sequence));"
-            }
-        )
-        return applyPageMetricsFromScriptReport(report)
     }
 
     func focusBottomInput() async {
@@ -469,25 +426,10 @@ final class MiniBrowserHarnessState {
             throw PageMetricsError.fixtureNotLoaded
         }
 
-        let rawJSON = try await callAsyncJavaScriptString(
-            "return window.testHarness.scrollInputIntoViewAndCapture('bottom-input');"
+        _ = try await callAsyncJavaScriptString(
+            "return window.testHarness.scrollInputIntoView('bottom-input');"
         )
-        let metrics = try decodePageMetrics(from: rawJSON)
-        pageMetrics = metrics
-        return metrics
-    }
-
-    @discardableResult
-    func scrollBottomInputIntoViewAndReportPageMetrics(reason: String) async throws -> PageMetrics {
-        let report = try await requestViewportScriptReport(
-            reason: reason,
-            scriptBuilder: { reasonLiteral, sequence in
-                """
-                return await window.testHarness.scrollInputIntoViewAndReport('bottom-input', \(reasonLiteral), \(sequence));
-                """
-            }
-        )
-        return applyPageMetricsFromScriptReport(report)
+        return try await refreshPageMetrics()
     }
 
     func markPageMetricsError(_ message: String) {
@@ -504,77 +446,12 @@ final class MiniBrowserHarnessState {
         return metrics
     }
 
-    private func requestViewportScriptReport(
-        reason: String,
-        scriptBuilder: (String, Int) throws -> String
-    ) async throws -> MiniBrowserViewportScriptReport {
-        guard fixtureLoaded else {
-            setPageMetricsLoading()
-            throw PageMetricsError.fixtureNotLoaded
-        }
-        guard let viewportScriptMessageHandler else {
-            throw PageMetricsError.scriptMessageHandlerUnavailable
-        }
-
-        let sequence = viewportScriptMessageHandler.nextSequence()
-        let reasonLiteral = try Self.javaScriptStringLiteral(reason)
-        let script = try scriptBuilder(reasonLiteral, sequence)
-        _ = try await callAsyncJavaScriptString(script)
-        return try await waitForViewportScriptReport(reason: reason, sequence: sequence)
-    }
-
-    private func waitForViewportScriptReport(
-        reason: String,
-        sequence: Int
-    ) async throws -> MiniBrowserViewportScriptReport {
-        guard let viewportScriptMessageHandler else {
-            throw PageMetricsError.scriptMessageHandlerUnavailable
-        }
-
-        let deadline = Date(timeIntervalSinceNow: 1)
-        repeat {
-            if let failure = viewportScriptMessageHandler.consumeFailure(sequence: sequence) {
-                throw PageMetricsError.scriptMessageInvalidPayload(failure)
-            }
-            if let report = viewportScriptMessageHandler.consumeReport(sequence: sequence) {
-                guard report.reason == reason else {
-                    throw PageMetricsError.scriptMessageUnexpectedReason(expected: reason, actual: report.reason)
-                }
-                return report
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        } while Date() < deadline
-
-        throw PageMetricsError.scriptMessageTimeout(reason: reason)
-    }
-
-    private func applyPageMetricsFromScriptReport(_ report: MiniBrowserViewportScriptReport) -> PageMetrics {
-        var metrics = report.pageMetrics
-        metrics.revision = pageMetrics.revision + 1
-        metrics.reportReason = report.reason
-        metrics.reportSequence = report.sequence
-        metrics.reportPhase = report.phase
-        metrics.reportStableSampleCount = report.stableSampleCount
-        metrics.reportFrameCount = report.frameCount
-        if metrics.status != "error" {
-            metrics.status = "ready"
-            metrics.errorMessage = nil
-        }
-        pageMetrics = metrics
-        return metrics
-    }
-
     private func callAsyncJavaScriptString(_ script: String) async throws -> String {
         let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
         guard let string = result as? String else {
             throw PageMetricsError.unexpectedResultType
         }
         return string
-    }
-
-    private static func javaScriptStringLiteral(_ value: String) throws -> String {
-        let data = try JSONEncoder().encode(value)
-        return String(decoding: data, as: UTF8.self)
     }
 
     private func errorPageMetrics(message: String) -> PageMetrics {
@@ -808,10 +685,6 @@ private enum PageMetricsError: Error, LocalizedError, CustomStringConvertible {
     case unexpectedResultType
     case fixtureNotLoaded
     case focusFailed(String)
-    case scriptMessageHandlerUnavailable
-    case scriptMessageInvalidPayload(String)
-    case scriptMessageUnexpectedReason(expected: String, actual: String)
-    case scriptMessageTimeout(reason: String)
 
     var errorDescription: String? {
         description
@@ -825,137 +698,6 @@ private enum PageMetricsError: Error, LocalizedError, CustomStringConvertible {
             "fixture not loaded"
         case let .focusFailed(message):
             "focus failed: \(message)"
-        case .scriptMessageHandlerUnavailable:
-            "viewport script message handler unavailable"
-        case let .scriptMessageInvalidPayload(message):
-            "invalid viewport script message: \(message)"
-        case let .scriptMessageUnexpectedReason(expected, actual):
-            "unexpected viewport script message reason: expected=\(expected), actual=\(actual)"
-        case let .scriptMessageTimeout(reason):
-            "timed out waiting for viewport script message: \(reason)"
-        }
-    }
-}
-
-private struct MiniBrowserViewportScriptReport: Equatable {
-    var sequence: Int
-    var reason: String
-    var phase: String
-    var stableSampleCount: Int
-    var frameCount: Int
-    var pageMetrics: MiniBrowserHarnessState.PageMetrics
-}
-
-@MainActor
-private final class MiniBrowserViewportScriptMessageHandler: NSObject, WKScriptMessageHandler {
-    static let name = "viewportHarness"
-
-    private var nextSequenceValue = 0
-    private var reportsBySequence: [Int: MiniBrowserViewportScriptReport] = [:]
-    private var failuresBySequence: [Int: String] = [:]
-
-    func nextSequence() -> Int {
-        nextSequenceValue += 1
-        return nextSequenceValue
-    }
-
-    func consumeReport(sequence: Int) -> MiniBrowserViewportScriptReport? {
-        reportsBySequence.removeValue(forKey: sequence)
-    }
-
-    func consumeFailure(sequence: Int) -> String? {
-        failuresBySequence.removeValue(forKey: sequence)
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        _ = userContentController
-        guard message.name == Self.name else {
-            return
-        }
-
-        do {
-            let report = try Self.decodeReport(from: message.body)
-            reportsBySequence[report.sequence] = report
-        } catch {
-            if let sequence = Self.sequence(from: message.body) {
-                failuresBySequence[sequence] = String(describing: error)
-            }
-        }
-    }
-
-    private static func decodeReport(from body: Any) throws -> MiniBrowserViewportScriptReport {
-        guard let dictionary = Self.dictionary(from: body) else {
-            throw MessageError.missingDictionary
-        }
-        guard let sequence = intValue(dictionary["sequence"]) else {
-            throw MessageError.missingSequence
-        }
-        guard let reason = dictionary["reason"] as? String else {
-            throw MessageError.missingReason
-        }
-        let phase = dictionary["phase"] as? String ?? ""
-        let stableSampleCount = intValue(dictionary["stableSampleCount"]) ?? 0
-        let frameCount = intValue(dictionary["frameCount"]) ?? 0
-        guard let metricsBody = Self.dictionary(from: dictionary["metrics"]) else {
-            throw MessageError.missingMetrics
-        }
-
-        let data = try JSONSerialization.data(withJSONObject: metricsBody)
-        let pageMetrics = try JSONDecoder().decode(MiniBrowserHarnessState.PageMetrics.self, from: data)
-        return MiniBrowserViewportScriptReport(
-            sequence: sequence,
-            reason: reason,
-            phase: phase,
-            stableSampleCount: stableSampleCount,
-            frameCount: frameCount,
-            pageMetrics: pageMetrics
-        )
-    }
-
-    private static func sequence(from body: Any) -> Int? {
-        guard let dictionary = Self.dictionary(from: body) else {
-            return nil
-        }
-        return intValue(dictionary["sequence"])
-    }
-
-    private static func dictionary(from value: Any?) -> [String: Any]? {
-        if let dictionary = value as? [String: Any] {
-            return dictionary
-        }
-        if let dictionary = value as? NSDictionary {
-            return dictionary as? [String: Any]
-        }
-        return nil
-    }
-
-    private static func intValue(_ value: Any?) -> Int? {
-        if let value = value as? Int {
-            return value
-        }
-        if let value = value as? NSNumber {
-            return value.intValue
-        }
-        return nil
-    }
-
-    private enum MessageError: Error, CustomStringConvertible {
-        case missingDictionary
-        case missingSequence
-        case missingReason
-        case missingMetrics
-
-        var description: String {
-            switch self {
-            case .missingDictionary:
-                "message body was not a dictionary"
-            case .missingSequence:
-                "message body did not include a numeric sequence"
-            case .missingReason:
-                "message body did not include a reason"
-            case .missingMetrics:
-                "message body did not include metrics"
-            }
         }
     }
 }
@@ -1272,10 +1014,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
 
     @discardableResult
     private func refreshSnapshot(
-        includePage: Bool,
-        afterViewportHeightChangeFrom previousViewportHeight: Int? = nil,
-        afterRenderingUpdate: Bool = false,
-        pageReportReason: String? = nil
+        includePage: Bool
     ) async throws -> (
         native: MiniBrowserHarnessState.NativeMetrics,
         page: MiniBrowserHarnessState.PageMetrics?
@@ -1285,16 +1024,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
         guard includePage else {
             return (native, nil)
         }
-        let page: MiniBrowserHarnessState.PageMetrics
-        if let pageReportReason {
-            page = try await state.refreshPageMetricsFromScriptMessage(reason: pageReportReason)
-        } else {
-            page = try await state.refreshPageMetrics(
-                afterViewportHeightChangeFrom: previousViewportHeight,
-                afterRenderingUpdate: afterRenderingUpdate
-            )
-        }
-        flushLayout()
+        let page = try await state.refreshPageMetrics()
         let refreshedNative = state.captureNativeMetrics(in: self)
         return (refreshedNative, page)
     }
@@ -1431,7 +1161,7 @@ private extension MiniBrowserHarnessViewController {
     }
 
     func runViewportSelfTest(checks: inout [String]) async throws -> (native: NativeMetrics, page: PageMetrics) {
-        let initial = try await refreshSnapshot(includePage: true, pageReportReason: "initial")
+        let initial = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("initial", initial)
         let initialPage = try requirePage(initial.page)
         try check("initial scenario", initial.native.scenario == MiniBrowserHarnessState.Scenario.standard.rawValue, checks: &checks)
@@ -1442,7 +1172,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyChromeMode(.navigationBarVisible)
         render()
-        let chromeVisible = try await refreshSnapshotUntilFixedBottomWithinViewport(reason: "navigation")
+        let chromeVisible = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("navigation", chromeVisible)
         let chromeVisiblePage = try requirePage(chromeVisible.page)
         try check("navigation chrome", chromeVisible.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarVisible.rawValue, checks: &checks)
@@ -1456,7 +1186,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.excludeTopSafeArea)
         render()
-        let excluded = try await refreshSnapshot(includePage: true, pageReportReason: "excludeTopSafeArea")
+        let excluded = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("excludeTopSafeArea", excluded)
         let excludedPage = try requirePage(excluded.page)
         try check("exclude top scenario", excluded.native.scenario == MiniBrowserHarnessState.Scenario.excludeTopSafeArea.rawValue, checks: &checks)
@@ -1470,12 +1200,12 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.standard)
         render()
-        let standardRestored = try await refreshSnapshot(includePage: true, pageReportReason: "standardRestored")
+        let standardRestored = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("standardRestored", standardRestored)
 
         state.applyChromeMode(.navigationBarHidden)
         render()
-        let chromeHidden = try await refreshSnapshotUntilFixedBottomWithinViewport(reason: "chromeHidden")
+        let chromeHidden = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("chromeHidden", chromeHidden)
         let chromeHiddenPage = try requirePage(chromeHidden.page)
         try check("restored chrome hidden", chromeHidden.native.chromeMode == MiniBrowserHarnessState.ChromeMode.navigationBarHidden.rawValue, checks: &checks)
@@ -1496,7 +1226,6 @@ private extension MiniBrowserHarnessViewController {
 
         return try await runLegacyKeyboardSelfTest(
             baselineNative: chromeHidden.native,
-            baselinePage: chromeHiddenPage,
             checks: &checks
         )
     }
@@ -1515,7 +1244,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.setAttached(true)
         render()
-        let reattached = try await refreshSnapshot(includePage: true, pageReportReason: "reattached")
+        let reattached = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("reattached", reattached)
         let reattachedPage = try requirePage(reattached.page)
         try check("modern reattached", reattached.native.attached && reattached.native.windowAttached, checks: &checks)
@@ -1529,7 +1258,7 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.neverAdjustment)
         render()
-        let never = try await refreshSnapshot(includePage: true, pageReportReason: "neverAdjustment")
+        let never = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("neverAdjustment", never)
         let neverPage = try requirePage(never.page)
         try check("modern never scenario", never.native.scenario == MiniBrowserHarnessState.Scenario.neverAdjustment.rawValue, checks: &checks)
@@ -1543,10 +1272,10 @@ private extension MiniBrowserHarnessViewController {
 
         state.applyScenario(.standard)
         render()
-        let standard = try await refreshSnapshot(includePage: true, pageReportReason: "standardBeforeKeyboard")
+        let standard = try await refreshSnapshot(includePage: true)
         recordSelfTestSnapshot("standardBeforeKeyboard", standard)
         let standardPage = try requirePage(standard.page)
-        let focused = try await focusBottomInputAndCapture(baselinePage: standardPage)
+        let focused = try await focusBottomInputAndCapture()
         recordSelfTestSnapshot("focused", native: focused.native, page: focused.page)
         try check("modern keyboard active element", focused.page.activeElement == "bottom-input", checks: &checks)
         try check("modern keyboard input visible", focused.page.bottomInputBottom <= focused.page.viewportHeight, checks: &checks)
@@ -1563,10 +1292,9 @@ private extension MiniBrowserHarnessViewController {
 
     func runLegacyKeyboardSelfTest(
         baselineNative: NativeMetrics,
-        baselinePage: PageMetrics,
         checks: inout [String]
     ) async throws -> (native: NativeMetrics, page: PageMetrics) {
-        let focused = try await focusBottomInputAndCapture(baselinePage: baselinePage)
+        let focused = try await focusBottomInputAndCapture()
         recordSelfTestSnapshot("focused", native: focused.native, page: focused.page)
         let keyboardHeight = focused.keyboardHeight
         let bottomInsetDelta = focused.native.adjustedBottom - baselineNative.adjustedBottom
@@ -1583,7 +1311,7 @@ private extension MiniBrowserHarnessViewController {
         return (focused.native, focused.page)
     }
 
-    func focusBottomInputAndCapture(baselinePage: PageMetrics) async throws -> (
+    func focusBottomInputAndCapture() async throws -> (
         native: NativeMetrics,
         page: PageMetrics,
         keyboardHeight: Int
@@ -1591,44 +1319,21 @@ private extension MiniBrowserHarnessViewController {
         let keyboardObserver = KeyboardFrameObserver()
         let inputSessionBaseline = state.selfTestInputSessionStartCount
         try await state.focusBottomInputForSelfTest()
-        await keyboardObserver.nextFrame()
-        let resizedPage = try await state.refreshPageMetricsFromScriptMessage(reason: "keyboardResized")
+        let keyboardFrame = try await keyboardObserver.nextFrame()
         flushLayout()
-        let page = try await state.scrollBottomInputIntoViewAndReportPageMetrics(reason: "focused")
+        let page = try await state.scrollBottomInputIntoViewAndRefreshPageMetrics()
         let native = state.captureNativeMetrics(in: self)
-        let notifiedKeyboardHeight = Int((keyboardObserver.frame?.height ?? 0).rounded())
-        let currentKeyboardHeight = Self.currentKeyboardHeight()
-        let visualViewportKeyboardHeight = max(0, baselinePage.viewportHeight - resizedPage.viewportHeight)
-        let keyboardHeight = max(notifiedKeyboardHeight, currentKeyboardHeight, visualViewportKeyboardHeight)
+        guard let window = state.webView.window else {
+            throw MiniBrowserSelfTestFailure(message: "web view detached while showing keyboard")
+        }
+        let keyboardFrameInWindow = window.convert(keyboardFrame, from: window.screen.coordinateSpace)
+        let keyboardHeight = Int(window.bounds.intersection(keyboardFrameInWindow).height.rounded())
         if state.shouldRequireSelfTestInputSessionStart {
             guard state.selfTestInputSessionStartCount > inputSessionBaseline else {
                 throw MiniBrowserSelfTestFailure(message: "keyboard input session did not start")
             }
         }
         return (native, page, keyboardHeight)
-    }
-
-    func refreshSnapshotUntilFixedBottomWithinViewport(reason: String) async throws -> (
-        native: NativeMetrics,
-        page: PageMetrics?
-    ) {
-        let deadline = Date(timeIntervalSinceNow: 1)
-        var latestSnapshot: (native: NativeMetrics, page: PageMetrics?)?
-
-        repeat {
-            let snapshot = try await refreshSnapshot(includePage: true, pageReportReason: reason)
-            let page = try requirePage(snapshot.page)
-            latestSnapshot = snapshot
-            if page.fixedBottomWithinViewport {
-                return snapshot
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        } while Date() < deadline
-
-        if let latestSnapshot {
-            return latestSnapshot
-        }
-        throw MiniBrowserSelfTestFailure(message: "missing fixed-bottom viewport snapshot")
     }
 
     @discardableResult
@@ -1651,7 +1356,7 @@ private extension MiniBrowserHarnessViewController {
         try check(
             "\(label) fixed bottom",
             page.fixedBottomWithinViewport,
-            "\(label) fixed bottom did not settle: viewportHeight=\(page.viewportHeight), fixedBottomBottom=\(page.fixedBottomBottom)",
+            "\(label) fixed bottom is outside the visual viewport: viewportHeight=\(page.viewportHeight), fixedBottomBottom=\(page.fixedBottomBottom)",
             checks: &checks
         )
     }
@@ -1734,30 +1439,6 @@ private extension MiniBrowserHarnessViewController {
             fputs("MiniBrowser self-test result write failed: \(error)\n", stderr)
             fflush(stderr)
         }
-    }
-
-    static func currentKeyboardHeight() -> Int {
-        guard let keyboardView = currentKeyboardView(), keyboardView.window != nil else {
-            return 0
-        }
-        guard keyboardView.isHidden == false, keyboardView.alpha > 0 else {
-            return 0
-        }
-        return Int(keyboardView.bounds.height.rounded())
-    }
-
-    static func currentKeyboardView() -> UIView? {
-        guard let keyboardImplClass = NSClassFromString("UIKeyboardImpl") else {
-            return nil
-        }
-        let selector = NSSelectorFromString("activeInstance")
-        guard let method = class_getClassMethod(keyboardImplClass, selector) else {
-            return nil
-        }
-        typealias ActiveInstance = @convention(c) (AnyClass, Selector) -> AnyObject?
-        let implementation = method_getImplementation(method)
-        let activeInstance = unsafeBitCast(implementation, to: ActiveInstance.self)
-        return activeInstance(keyboardImplClass, selector) as? UIView
     }
 
 }
@@ -1882,57 +1563,37 @@ private struct MiniBrowserSelfTestFailure: Error, CustomStringConvertible {
 @MainActor
 private final class KeyboardFrameObserver {
     private let notificationCenter: NotificationCenter
+    private let frames: AsyncStream<CGRect>
+    private let continuation: AsyncStream<CGRect>.Continuation
     private var observer: NSObjectProtocol?
-    private var frameContinuation: CheckedContinuation<CGRect, Never>?
-    private(set) var frame: CGRect?
 
     init(notificationCenter: NotificationCenter = .default) {
         self.notificationCenter = notificationCenter
+        let (frames, continuation) = AsyncStream<CGRect>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.frames = frames
+        self.continuation = continuation
         observer = notificationCenter.addObserver(
-            forName: UIResponder.keyboardDidChangeFrameNotification,
+            forName: UIResponder.keyboardDidShowNotification,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
+        ) { notification in
             let frame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .null
-            Task { @MainActor [weak self] in
-                self?.receive(frame)
-            }
+            continuation.yield(frame)
+            continuation.finish()
         }
     }
 
     isolated deinit {
-        if let frameContinuation {
-            self.frameContinuation = nil
-            frameContinuation.resume(returning: frame ?? .null)
-        }
         invalidate()
     }
 
-    @discardableResult
-    func nextFrame() async -> CGRect {
-        if let frame {
-            return frame
+    func nextFrame() async throws -> CGRect {
+        defer { invalidate() }
+        var iterator = frames.makeAsyncIterator()
+        guard let frame = await iterator.next() else {
+            throw CancellationError()
         }
-
-        return await withCheckedContinuation { continuation in
-            if let frame {
-                continuation.resume(returning: frame)
-            } else {
-                frameContinuation = continuation
-            }
-        }
-    }
-
-    private func receive(_ frame: CGRect) {
-        guard self.frame == nil else {
-            return
-        }
-        self.frame = frame
-        if let frameContinuation {
-            self.frameContinuation = nil
-            frameContinuation.resume(returning: frame)
-        }
-        invalidate()
+        return frame
     }
 
     private func invalidate() {
@@ -1940,5 +1601,6 @@ private final class KeyboardFrameObserver {
             notificationCenter.removeObserver(observer)
             self.observer = nil
         }
+        continuation.finish()
     }
 }
