@@ -155,7 +155,14 @@
 
         window.testHarness = {
             captureState() {
-                return withErrorState(buildState);
+                // Initial ResizeObserver delivery follows layout even when the root size is unchanged.
+                return new Promise((resolve) => {
+                    const observer = new ResizeObserver(() => {
+                        observer.disconnect();
+                        resolve(withErrorState(buildState));
+                    });
+                    observer.observe(document.documentElement);
+                });
             },
             focusInput(identifier) {
                 return withErrorState(() => JSON.stringify({ status: focusInput(identifier) ? "ready" : "error" }));

@@ -376,8 +376,8 @@ final class MiniBrowserHarnessState {
             throw PageMetricsError.fixtureNotLoaded
         }
 
-        // JavaScript frame callbacks can run before native viewport changes reach WebContent.
-        // Snapshot completion includes pending screen updates before we read DOM geometry.
+        // Native screen updates and DOM layout have separate completion boundaries.
+        // captureState waits for WebContent layout after the snapshot incorporates native updates.
         let configuration = WKSnapshotConfiguration()
         configuration.afterScreenUpdates = true
         configuration.snapshotWidth = 1
@@ -1356,7 +1356,7 @@ private extension MiniBrowserHarnessViewController {
         try check(
             "\(label) fixed bottom",
             page.fixedBottomWithinViewport,
-            "\(label) fixed bottom did not settle: viewportHeight=\(page.viewportHeight), fixedBottomBottom=\(page.fixedBottomBottom)",
+            "\(label) fixed bottom is outside the visual viewport: viewportHeight=\(page.viewportHeight), fixedBottomBottom=\(page.fixedBottomBottom)",
             checks: &checks
         )
     }
