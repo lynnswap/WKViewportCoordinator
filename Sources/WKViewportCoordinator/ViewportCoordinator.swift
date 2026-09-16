@@ -256,8 +256,7 @@ final class ViewportMetricsResolver {
         let topObscuredHeight = includesNavigationBarInObscuredInsets
             ? max(viewportSafeAreaInsets.top, topEdgeObscuredHeight(
                 of: hostViewController.navigationController?.navigationBar,
-                in: hostView,
-                extendingFrom: viewportSafeAreaInsets.top
+                in: hostView
             ))
             : viewportSafeAreaInsets.top
         let bottomObscuredHeight = bottomEdgeObscuredHeight(
@@ -308,8 +307,7 @@ final class ViewportMetricsResolver {
 
     private func topEdgeObscuredHeight(
         of chromeView: UIView?,
-        in hostView: UIView?,
-        extendingFrom leadingObscuredHeight: CGFloat = 0
+        in hostView: UIView?
     ) -> CGFloat {
         guard let chromeView, let hostView else {
             return 0
@@ -323,18 +321,12 @@ final class ViewportMetricsResolver {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        let leadingObscuredMaxY = hostFrameInWindow.minY + max(0, leadingObscuredHeight)
-        guard chromeFrameInWindow.minY <= leadingObscuredMaxY else {
-            return 0
-        }
-        guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
+        let overlap = hostFrameInWindow.intersection(chromeFrameInWindow)
+        guard !overlap.isEmpty else {
             return 0
         }
 
-        return max(
-            max(0, leadingObscuredHeight),
-            max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
-        )
+        return overlap.maxY - hostFrameInWindow.minY
     }
 
     private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {

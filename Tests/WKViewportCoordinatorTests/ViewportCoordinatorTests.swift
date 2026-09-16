@@ -101,18 +101,11 @@ struct ViewportCoordinatorTests {
             inputAccessoryOverlapHeight: 0
         )
 
-        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: try #require(webView.superview)))
-        #expect(
-            metrics.topObscuredHeight
-                == max(
-                    metrics.safeArea.viewport.top,
-                    topEdgeObscuredHeight(
-                        of: navigationController.navigationBar,
-                        in: try #require(webView.superview),
-                        extendingFrom: metrics.safeArea.viewport.top
-                    )
-                )
-        )
+        let hostView = try #require(webView.superview)
+        let barFrame = navigationController.navigationBar.convert(navigationController.navigationBar.bounds, to: hostView)
+        #expect(barFrame.maxY > hostView.bounds.minY)
+        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: hostView))
+        #expect(metrics.topObscuredHeight == max(metrics.safeArea.viewport.top, barFrame.maxY - hostView.bounds.minY))
     }
 
     @Test(arguments: [(CGFloat(0), CGFloat(0)), (CGFloat(300), CGFloat(344))])
@@ -217,8 +210,69 @@ struct ViewportCoordinatorTests {
         #expect(webView.scrollView.bottomEdgeEffect.style == .soft)
     }
 
-    @Test
-    func viewportMetricsResolverIgnoresNavigationBarThatDoesNotReachTopEdge() throws {
+    @Test(arguments: [0, 1])
+    func coordinatorIncludesNavigationBarSeparatedFromViewportTop(column: Int) throws {
+        let hostViewController = UIViewController()
+        let viewportContainer = UIView()
+        hostViewController.view.addSubview(viewportContainer)
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: viewportContainer)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        let coordinator = ViewportCoordinator(hostViewController: hostViewController, webView: webView)
+        defer { coordinator.invalidate() }
+
+        let columnWidth = window.bounds.width / 2
+        let viewportFrame = CGRect(
+            x: CGFloat(column) * columnWidth,
+            y: window.safeAreaInsets.top,
+            width: columnWidth,
+            height: window.bounds.height - window.safeAreaInsets.top
+        )
+        setFrame(of: viewportContainer, in: window, to: viewportFrame)
+        viewportContainer.layoutIfNeeded()
+        let barFrame = CGRect(
+            x: viewportFrame.minX,
+            y: viewportFrame.minY + 24,
+            width: columnWidth,
+            height: 54
+        )
+        setFrame(of: navigationController.navigationBar, in: window, to: barFrame)
+        coordinator.updateViewport()
+
+        let included = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(included.viewportSafeAreaInsets.top == 0)
+        #expect(included.obscuredInsets.top == 78)
+        #expect(webView.scrollView.adjustedContentInset.top == 78)
+        if #available(iOS 26.0, *) {
+            #expect(webView.obscuredContentInsets.top == 78)
+            #expect(webView.scrollView.contentInset.top == 78)
+        }
+
+        coordinator.includesNavigationBarInObscuredInsets = false
+        #expect(try #require(coordinator.resolvedMetricsForTesting).obscuredInsets.top == 0)
+        #expect(webView.scrollView.adjustedContentInset.top == 0)
+        coordinator.includesNavigationBarInObscuredInsets = true
+        #expect(try #require(coordinator.resolvedMetricsForTesting).obscuredInsets.top == 78)
+        #expect(webView.scrollView.adjustedContentInset.top == 78)
+
+        navigationController.navigationBar.isHidden = true
+        coordinator.updateViewport()
+        #expect(try #require(coordinator.resolvedMetricsForTesting).obscuredInsets.top == 0)
+        #expect(webView.scrollView.adjustedContentInset.top == 0)
+    }
+
+    @Test(arguments: [
+        CGRect(x: 0, y: -54, width: 100, height: 54),
+        CGRect(x: 0, y: 200, width: 100, height: 54),
+        CGRect(x: 100, y: 24, width: 100, height: 54),
+    ])
+    func viewportMetricsResolverIgnoresNavigationBarOutsideViewport(barFrame: CGRect) throws {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         hostViewController.view.addSubview(webView)
@@ -235,9 +289,13 @@ struct ViewportCoordinatorTests {
         hostViewController.view.layoutIfNeeded()
         navigationController.view.layoutIfNeeded()
 
-        var navigationBarFrame = navigationController.navigationBar.frame
-        navigationBarFrame.origin.y = navigationController.view.bounds.midY
-        navigationController.navigationBar.frame = navigationBarFrame
+        let viewportFrame = CGRect(x: 0, y: window.safeAreaInsets.top, width: 100, height: 200)
+        setFrame(of: hostViewController.view, in: window, to: viewportFrame)
+        setFrame(
+            of: navigationController.navigationBar,
+            in: window,
+            to: barFrame.offsetBy(dx: viewportFrame.minX, dy: viewportFrame.minY)
+        )
 
         let metrics = ViewportMetricsResolver().makeViewportMetrics(
             in: hostViewController,
@@ -245,16 +303,8 @@ struct ViewportCoordinatorTests {
             keyboardOverlapHeight: 0,
             inputAccessoryOverlapHeight: 0
         )
-        let hostView = try #require(webView.superview)
-        let topEdgeHeight = topEdgeObscuredHeight(
-            of: navigationController.navigationBar,
-            in: hostView,
-            extendingFrom: metrics.safeArea.viewport.top
-        )
-
-        #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: hostView))
-        #expect(topEdgeHeight == 0)
-        #expect(metrics.topObscuredHeight == metrics.safeArea.viewport.top)
+        #expect(metrics.safeArea.viewport.top == 0)
+        #expect(metrics.topObscuredHeight == 0)
     }
 
     @Test
@@ -577,17 +627,6 @@ struct ViewportCoordinatorTests {
 
         #expect(metrics.safeArea.viewport == projectedWindowSafeAreaInsets(in: viewportContainer))
         #expect(metrics.safeArea.legacyFallbackBaseline == viewportContainer.safeAreaInsets)
-        #expect(
-            metrics.topObscuredHeight
-                == max(
-                    metrics.safeArea.viewport.top,
-                    topEdgeObscuredHeight(
-                        of: navigationController.navigationBar,
-                        in: viewportContainer,
-                        extendingFrom: metrics.safeArea.viewport.top
-                    )
-                )
-        )
         #expect(metrics.topObscuredHeight == 0)
     }
 
@@ -2451,38 +2490,6 @@ private func projectedWindowSafeAreaInsets(in hostView: UIView) -> UIEdgeInsets 
         left: max(0, safeRectInWindow.minX - hostRectInWindow.minX),
         bottom: max(0, hostRectInWindow.maxY - safeRectInWindow.maxY),
         right: max(0, hostRectInWindow.maxX - safeRectInWindow.maxX)
-    )
-}
-
-@MainActor
-private func topEdgeObscuredHeight(
-    of chromeView: UIView?,
-    in hostView: UIView,
-    extendingFrom leadingObscuredHeight: CGFloat = 0
-) -> CGFloat {
-    guard let chromeView else {
-        return 0
-    }
-    guard let window = hostView.window, chromeView.window != nil else {
-        return 0
-    }
-    guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
-        return 0
-    }
-
-    let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
-    let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-    let leadingObscuredMaxY = hostFrameInWindow.minY + max(0, leadingObscuredHeight)
-    guard chromeFrameInWindow.minY <= leadingObscuredMaxY else {
-        return 0
-    }
-    guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
-        return 0
-    }
-
-    return max(
-        max(0, leadingObscuredHeight),
-        max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
     )
 }
 
