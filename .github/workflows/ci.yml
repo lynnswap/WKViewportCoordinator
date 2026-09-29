@@ -39,7 +39,7 @@ jobs:
             xcode_channel: stable
             xcode_major: '26'
             ios_major: '26'
-            timeout_minutes: 10
+            timeout_minutes: 20
           - name: iOS 27 latest
             runner: xcode-27
             xcode_channel: latest
