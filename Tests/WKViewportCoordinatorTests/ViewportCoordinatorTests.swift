@@ -1887,6 +1887,38 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func viewportSPIBridgeDoesNotRetainReceiversInCachedMethods() {
+        weak var observed: TestInputBoundsSPIObject?
+        let firstBounds = CGRect(x: 1, y: 2, width: 3, height: 4)
+        autoreleasepool {
+            let object = TestInputBoundsSPIObject()
+            observed = object
+            object.boundsInWindow = firstBounds
+            #expect(ViewportSPIBridge.inputViewBoundsInWindow(of: object) == firstBounds)
+        }
+        #expect(observed == nil)
+
+        let second = TestInputBoundsSPIObject()
+        second.boundsInWindow = CGRect(x: 5, y: 6, width: 7, height: 8)
+        #expect(ViewportSPIBridge.inputViewBoundsInWindow(of: second) == second.boundsInWindow)
+    }
+
+    @Test
+    func viewportSPIBridgeDoesNotFallbackAfterSignatureMismatch() {
+        let object = TestIncompatibleContentInsetSPIObject()
+        #expect(ViewportSPIBridge.resetLegacyViewportFallback(on: object, webView: NSObject()) == false)
+        #expect(object.primaryCalls == 0)
+        #expect(object.fallbackCalls == 0)
+    }
+
+    @Test
+    func viewportSPIBridgeTreatsBooleanFalseAsCompletedInvocation() {
+        let object = TestBooleanContentInsetSPIObject()
+        #expect(ViewportSPIBridge.resetLegacyViewportFallback(on: object, webView: NSObject()))
+        #expect(object.insets == .zero)
+    }
+
+    @Test
     func viewportSPIBridgeFallbackNoOpsWhenSelectorsAreUnavailable() {
         let plainObject = NSObject()
         let resolvedMetrics = ResolvedViewportMetrics(
@@ -2095,6 +2127,40 @@ struct ViewportCoordinatorTests {
                 ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
             ]
         )
+    }
+}
+
+@MainActor
+private final class TestInputBoundsSPIObject: NSObject {
+    var boundsInWindow: CGRect = .zero
+
+    @objc(_inputViewBoundsInWindow)
+    func inputViewBoundsInWindow() -> CGRect { boundsInWindow }
+}
+
+@MainActor
+private final class TestIncompatibleContentInsetSPIObject: NSObject {
+    private(set) var primaryCalls = 0
+    private(set) var fallbackCalls = 0
+
+    @objc(_setContentScrollInset:)
+    func setContentScrollInset(_ value: Double) { primaryCalls += 1 }
+
+    @objc(_setContentScrollInsetInternal:)
+    func setContentScrollInsetInternal(_ insets: UIEdgeInsets) -> Bool {
+        fallbackCalls += 1
+        return true
+    }
+}
+
+@MainActor
+private final class TestBooleanContentInsetSPIObject: NSObject {
+    private(set) var insets: UIEdgeInsets?
+
+    @objc(_setContentScrollInsetInternal:)
+    func setContentScrollInsetInternal(_ insets: UIEdgeInsets) -> Bool {
+        self.insets = insets
+        return false
     }
 }
 

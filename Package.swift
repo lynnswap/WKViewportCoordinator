@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -11,7 +11,7 @@ let strictSwiftSettings: [SwiftSetting] = [
 let package = Package(
     name: "WKViewportCoordinator",
     platforms: [
-        .iOS(.v18)
+        .iOS("18.4")
     ],
     products: [
         .library(
@@ -19,9 +19,13 @@ let package = Package(
             targets: ["WKViewportCoordinator"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/lynnswap/ABIBridge.git", .upToNextMinor(from: "0.5.0")),
+    ],
     targets: [
         .target(
             name: "WKViewportCoordinator",
+            dependencies: [.product(name: "ABIBridge", package: "ABIBridge")],
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
