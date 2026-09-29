@@ -4,8 +4,8 @@
 
 ## Overview
 
-- iOS 18+
-- Swift 6.2+
+- iOS 18.4+
+- Swift 6.3+
 - `WKWebView`-based viewport management with keyboard and safe-area coordination
 
 > [!WARNING]
