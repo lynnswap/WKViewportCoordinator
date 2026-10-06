@@ -20,7 +20,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/lynnswap/ABIBridge.git", .upToNextMinor(from: "0.8.0")),
+        .package(url: "https://github.com/lynnswap/ABIBridge.git", .upToNextMinor(from: "0.8.1")),
     ],
     targets: [
         .target(
