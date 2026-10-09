@@ -1161,6 +1161,49 @@ struct ViewportCoordinatorTests {
         coordinator.invalidate()
     }
 
+    @Test(arguments: [UIScrollView.ContentInsetAdjustmentBehavior.never, .always], ["auto", "cover"])
+    @available(iOS 26.0, *)
+    func invalidationRestoresTheWebPageLayoutWidth(
+        adjustment: UIScrollView.ContentInsetAdjustmentBehavior,
+        viewportFit: String
+    ) async throws {
+        let controller = UIViewController()
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        webView.scrollView.contentInsetAdjustmentBehavior = adjustment
+        controller.view.addSubview(webView)
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        webView.loadHTMLString("""
+            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=\(viewportFit)">
+            <body id="ready"></body>
+            """, baseURL: nil)
+
+        func pageWidth(reaching expected: Double) async throws -> Double {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            var width = 0.0
+            repeat {
+                if let value = try await webView.evaluateJavaScript(
+                    "document.getElementById('ready') ? innerWidth : null"
+                ) as? Double {
+                    width = value
+                    if abs(width - expected) <= 1 { return width }
+                }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            return width
+        }
+
+        let originalWidth = webView.bounds.width
+        #expect(abs(try await pageWidth(reaching: originalWidth) - originalWidth) <= 1)
+        let coordinator = ViewportCoordinator(webView: webView)
+        coordinator.additionalObscuredContentInsets.right = 100
+        let reducedWidth = webView.bounds.inset(by: webView.obscuredContentInsets).width
+        #expect(reducedWidth < originalWidth)
+        #expect(abs(try await pageWidth(reaching: reducedWidth) - reducedWidth) <= 1)
+        coordinator.invalidate()
+        #expect(abs(try await pageWidth(reaching: originalWidth) - originalWidth) <= 1)
+    }
+
     @Test
     func invalidationReleasesWebKitOverridesAndStopsFurtherUpdates() throws {
         let controller = UIViewController()

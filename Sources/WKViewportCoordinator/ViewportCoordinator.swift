@@ -565,6 +565,8 @@ public final class ViewportCoordinator: NSObject {
             on: webView.scrollView
         )
         if #available(iOS 26.0, *) {
+            // Flag resets do not recalculate WebKit's layout viewport.
+            webView.obscuredContentInsets = .zero
             ViewportSPIBridge.resetViewportOverrides(on: webView)
         } else {
             ViewportSPIBridge.resetLegacyViewportFallback(on: webView.scrollView, webView: webView)
