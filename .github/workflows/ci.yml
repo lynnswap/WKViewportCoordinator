@@ -29,26 +29,22 @@ jobs:
         include:
           - name: iOS 18 latest
             runner: macos-26
-            xcode_channel: stable
             xcode_major: '26'
             ios_major: '18'
             runtime_version: '18.6'
             timeout_minutes: 30
           - name: iOS 26 latest
             runner: macos-26
-            xcode_channel: stable
             xcode_major: '26'
             ios_major: '26'
             timeout_minutes: 20
           - name: iOS 27 latest
             runner: xcode-27
-            xcode_channel: latest
             xcode_major: '27'
             ios_major: '27'
             timeout_minutes: 20
     runs-on: ${{ matrix.runner }}
     env:
-      XCODE_CHANNEL: ${{ matrix.xcode_channel }}
       XCODE_MAJOR: ${{ matrix.xcode_major }}
       IOS_MAJOR: ${{ matrix.ios_major }}
     steps:
@@ -60,7 +56,6 @@ jobs:
       - name: Resolve Xcode
         run: |
           ruby <<'RUBY'
-          channel = ENV.fetch("XCODE_CHANNEL")
           xcode_major = ENV.fetch("XCODE_MAJOR", "")
 
           candidates = Dir["/Applications/Xcode*.app"].select { |path| File.directory?(path) }
@@ -75,9 +70,7 @@ jobs:
             end
           end
 
-          candidates = candidates.select do |path|
-            channel == "latest" || (channel == "prerelease" ? prerelease_xcode_path?(path) : !prerelease_xcode_path?(path))
-          end
+          candidates = candidates.reject { |path| prerelease_xcode_path?(path) }
 
           def version_components(path)
             version = File.basename(path)[/Xcode[_-](\d+(?:[._]\d+)*)/, 1]
@@ -85,7 +78,7 @@ jobs:
           end
 
           selected = candidates.max_by { |path| version_components(path) }
-          abort("No #{channel} Xcode#{xcode_major.empty? ? "" : " #{xcode_major}"} installation found") unless selected
+          abort("No stable Xcode#{xcode_major.empty? ? "" : " #{xcode_major}"} installation found") unless selected
 
           File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
             env.puts "DEVELOPER_DIR=#{selected}/Contents/Developer"
