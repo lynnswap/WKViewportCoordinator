@@ -3,158 +3,92 @@ import Combine
 import UIKit
 import WebKit
 
-/// Controls how bottom bars contribute to the final obscured viewport inset.
-public enum ViewportBottomBarObscurationBehavior: Equatable {
-    /// Includes bottom bars while keyboard or input accessory overlap is active.
-    case includeWhenKeyboardOverlaps
-
-    /// Ignores bottom bars while keyboard or input accessory overlap is active.
-    case ignoreWhenKeyboardOrAccessoryOverlaps
-}
-
-/// Scroll edge effects applied to a coordinated web view's scroll view.
-public struct ViewportScrollEdgeEffects: Equatable {
-    /// The top scroll edge effect.
-    public var top: ViewportScrollEdgeEffect
-
-    /// The bottom scroll edge effect.
-    public var bottom: ViewportScrollEdgeEffect
-
-    /// Creates scroll edge effects.
-    ///
-    /// - Parameters:
-    ///   - top: The top scroll edge effect.
-    ///   - bottom: The bottom scroll edge effect.
-    public init(
-        top: ViewportScrollEdgeEffect = ViewportScrollEdgeEffect(),
-        bottom: ViewportScrollEdgeEffect = ViewportScrollEdgeEffect()
-    ) {
-        self.top = top
-        self.bottom = bottom
-    }
-}
-
-/// A scroll edge effect applied to one edge of a coordinated web view's scroll view.
-public struct ViewportScrollEdgeEffect: Equatable {
-    /// Describes the scroll edge effect style.
-    public enum Style: Equatable {
-        /// Uses UIKit's automatic edge effect style.
-        case automatic
-
-        /// Uses a hard edge effect style.
-        case hard
-
-        /// Uses a soft edge effect style.
-        case soft
-    }
-
-    /// A Boolean value indicating whether the edge effect is hidden.
-    public var isHidden: Bool
-
-    /// The style applied to the edge effect.
-    public var style: Style
-
-    /// Creates a scroll edge effect.
-    ///
-    /// - Parameters:
-    ///   - isHidden: Whether the edge effect should be hidden.
-    ///   - style: The style applied to the edge effect.
-    public init(isHidden: Bool = false, style: Style = .soft) {
-        self.isHidden = isHidden
-        self.style = style
-    }
-}
-
 struct ViewportSafeAreaMetrics: Equatable {
     var viewport: UIEdgeInsets
     var legacyFallbackBaseline: UIEdgeInsets
-
-    init(
-        viewport: UIEdgeInsets,
-        legacyFallbackBaseline: UIEdgeInsets
-    ) {
-        self.viewport = viewport
-        self.legacyFallbackBaseline = legacyFallbackBaseline
-    }
 }
 
 struct ViewportMetrics: Equatable {
     var safeArea: ViewportSafeAreaMetrics
-    var topObscuredHeight: CGFloat
-    var bottomObscuredHeight: CGFloat
+    var obscuredInsets: UIEdgeInsets
     var keyboardOverlapHeight: CGFloat
     var inputAccessoryOverlapHeight: CGFloat
-    var bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior
-    var additionalObscuredContentInsets: UIEdgeInsets
-    var obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge
-
-    init(
-        safeArea: ViewportSafeAreaMetrics,
-        topObscuredHeight: CGFloat,
-        bottomObscuredHeight: CGFloat,
-        keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat,
-        bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior = .includeWhenKeyboardOverlaps,
-        additionalObscuredContentInsets: UIEdgeInsets = .zero,
-        obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom]
-    ) {
-        self.safeArea = safeArea
-        self.topObscuredHeight = topObscuredHeight
-        self.bottomObscuredHeight = bottomObscuredHeight
-        self.keyboardOverlapHeight = keyboardOverlapHeight
-        self.inputAccessoryOverlapHeight = inputAccessoryOverlapHeight
-        self.bottomBarObscurationBehavior = bottomBarObscurationBehavior
-        self.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
-        self.obscuredContentInsetEdgesAffectedBySafeArea = obscuredContentInsetEdgesAffectedBySafeArea
-    }
+    var additionalObscuredContentInsets: UIEdgeInsets = .zero
 
     var finalObscuredInsets: UIEdgeInsets {
-        UIEdgeInsets(
-            top: max(0, topObscuredHeight) + additionalObscuredContentInsets.top,
-            left: additionalObscuredContentInsets.left,
-            bottom: resolvedBottomObscuredHeight,
-            right: additionalObscuredContentInsets.right
-        )
+        var insets = scrollFallbackObscuredInsets
+        insets.bottom = max(insets.bottom, keyboardOverlapHeight, inputAccessoryOverlapHeight)
+        return insets
     }
 
+    // WebKit already includes keyboard avoidance in its legacy system inset.
     var scrollFallbackObscuredInsets: UIEdgeInsets {
-        UIEdgeInsets(
-            top: max(0, topObscuredHeight) + additionalObscuredContentInsets.top,
-            left: additionalObscuredContentInsets.left,
-            bottom: resolvedBottomScrollFallbackHeight,
-            right: additionalObscuredContentInsets.right
-        )
+        obscuredInsets.wk_clampedNonNegative.wk_adding(additionalObscuredContentInsets.wk_clampedNonNegative)
     }
+}
 
-    private var resolvedBottomObscuredHeight: CGFloat {
-        let chromeHeight = resolvedBottomChromeHeight
-        let keyboardHeight = max(0, keyboardOverlapHeight)
-        let accessoryHeight = max(0, inputAccessoryOverlapHeight)
-        switch bottomBarObscurationBehavior {
-        case .includeWhenKeyboardOverlaps:
-            return max(0, chromeHeight, keyboardHeight, accessoryHeight)
-        case .ignoreWhenKeyboardOrAccessoryOverlaps:
-            if keyboardHeight > 0 || accessoryHeight > 0 {
-                return max(keyboardHeight, accessoryHeight)
+/// Geometry is expressed in the web view's coordinates, including when its
+/// frame occupies only part of the host view or a container overlays a column.
+struct ViewportGeometry {
+    var bounds: CGRect
+    var windowSafeAreaInsets: UIEdgeInsets
+    var safeAreaInsets: UIEdgeInsets
+    var navigationBarFrame: CGRect?
+    var barFrames: [CGRect]
+
+    func obscuredInsets(includesNavigationBar: Bool) -> UIEdgeInsets {
+        var insets = windowSafeAreaInsets.wk_maxPerEdge(with: safeAreaInsets)
+
+        if let navigationBarFrame {
+            let overlap = bounds.intersection(navigationBarFrame)
+            if !overlap.isEmpty {
+                insets.top = max(insets.top, overlap.maxY - bounds.minY)
+                if !includesNavigationBar {
+                    // Retain any system area above the bar and any additional
+                    // container safe area below it; exclude only the bar itself.
+                    insets.top = max(windowSafeAreaInsets.top, insets.top - overlap.height)
+                }
             }
-            return chromeHeight
         }
-    }
 
-    private var resolvedBottomChromeHeight: CGFloat {
-        max(0, bottomObscuredHeight) + additionalObscuredContentInsets.bottom
-    }
-
-    private var resolvedBottomScrollFallbackHeight: CGFloat {
-        switch bottomBarObscurationBehavior {
-        case .includeWhenKeyboardOverlaps:
-            return resolvedBottomChromeHeight
-        case .ignoreWhenKeyboardOrAccessoryOverlaps:
-            if max(0, keyboardOverlapHeight) > 0 || max(0, inputAccessoryOverlapHeight) > 0 {
-                return 0
+        // Start at an existing safe-area boundary so adjacent native bars can
+        // extend it, including a toolbar stacked above a tab bar. Classify each
+        // bar before clipping: a narrow web view must not turn a bottom bar into
+        // a side bar, nor may a vertical tab bar consume the viewport's height.
+        var previous: UIEdgeInsets
+        repeat {
+            previous = insets
+            for frame in barFrames {
+                let overlap = bounds.intersection(frame)
+                guard !overlap.isEmpty else { continue }
+                if frame.width >= frame.height {
+                    if abs(frame.minY - bounds.minY) < abs(bounds.maxY - frame.maxY) {
+                        let boundary = bounds.minY + max(insets.top, windowSafeAreaInsets.top)
+                        if overlap.minY <= boundary {
+                            insets.top = max(insets.top, overlap.maxY - bounds.minY)
+                        }
+                    } else {
+                        let boundary = bounds.maxY - max(insets.bottom, windowSafeAreaInsets.bottom)
+                        if overlap.maxY >= boundary {
+                            insets.bottom = max(insets.bottom, bounds.maxY - overlap.minY)
+                        }
+                    }
+                } else {
+                    if abs(frame.minX - bounds.minX) < abs(bounds.maxX - frame.maxX) {
+                        let boundary = bounds.minX + max(insets.left, windowSafeAreaInsets.left)
+                        if overlap.minX <= boundary {
+                            insets.left = max(insets.left, windowSafeAreaInsets.left, overlap.maxX - bounds.minX)
+                        }
+                    } else {
+                        let boundary = bounds.maxX - max(insets.right, windowSafeAreaInsets.right)
+                        if overlap.maxX >= boundary {
+                            insets.right = max(insets.right, windowSafeAreaInsets.right, bounds.maxX - overlap.minX)
+                        }
+                    }
+                }
             }
-            return resolvedBottomChromeHeight
-        }
+        } while previous != insets
+        return insets
     }
 }
 
@@ -163,7 +97,6 @@ struct ResolvedViewportMetrics: Equatable {
     let legacyFallbackSafeAreaInsets: UIEdgeInsets
     let obscuredInsets: UIEdgeInsets
     let unobscuredSafeAreaInsets: UIEdgeInsets
-    let obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge
     let contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
     let contentScrollInsetFallback: UIEdgeInsets
 
@@ -182,7 +115,6 @@ struct ResolvedViewportMetrics: Equatable {
             bottom: max(0, viewportSafeAreaInsets.bottom - obscuredInsets.bottom),
             right: max(0, viewportSafeAreaInsets.right - obscuredInsets.right)
         )
-        obscuredContentInsetEdgesAffectedBySafeArea = state.obscuredContentInsetEdgesAffectedBySafeArea
         self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
         let safeAreaInsetContribution: UIEdgeInsets
         if contentInsetAdjustmentBehavior == .never {
@@ -236,8 +168,6 @@ struct AppliedViewportState: Equatable {
 
         return lhs.resolvedMetrics.obscuredInsets == rhs.resolvedMetrics.obscuredInsets
             && lhs.resolvedMetrics.unobscuredSafeAreaInsets == rhs.resolvedMetrics.unobscuredSafeAreaInsets
-            && lhs.resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea
-                == rhs.resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea
     }
 }
 
@@ -248,167 +178,60 @@ final class ViewportMetricsResolver {
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat,
-        includesNavigationBarInObscuredInsets: Bool = true
+        includesNavigationBar: Bool = true
     ) -> ViewportMetrics {
-        let hostView = webView.superview ?? hostViewController.viewIfLoaded
-        let viewportSafeAreaInsets = projectedWindowSafeAreaInsets(in: hostView)
-        let legacyFallbackSafeAreaInsets = hostView?.safeAreaInsets ?? .zero
-        let topObscuredHeight = includesNavigationBarInObscuredInsets
-            ? max(viewportSafeAreaInsets.top, topEdgeObscuredHeight(
-                of: hostViewController.navigationController?.navigationBar,
-                in: hostView
-            ))
-            : viewportSafeAreaInsets.top
-        let bottomObscuredHeight = bottomEdgeObscuredHeight(
-            of: [
-                hostViewController.tabBarController?.tabBar,
-                resolvedVisibleToolbar(for: hostViewController),
-            ],
-            in: hostView,
-            extendingFrom: viewportSafeAreaInsets.bottom
+        let windowSafeAreaInsets: UIEdgeInsets
+        if let window = webView.window {
+            let safeRect = webView.convert(window.bounds.inset(by: window.safeAreaInsets), from: window)
+            windowSafeAreaInsets = UIEdgeInsets(
+                top: max(0, safeRect.minY - webView.bounds.minY),
+                left: max(0, safeRect.minX - webView.bounds.minX),
+                bottom: max(0, webView.bounds.maxY - safeRect.maxY),
+                right: max(0, webView.bounds.maxX - safeRect.maxX)
+            )
+        } else {
+            windowSafeAreaInsets = .zero
+        }
+        let navigationController = hostViewController.navigationController
+        let toolbar = navigationController?.isToolbarHidden == false ? navigationController?.toolbar : nil
+        let geometry = ViewportGeometry(
+            bounds: webView.bounds,
+            windowSafeAreaInsets: windowSafeAreaInsets,
+            safeAreaInsets: webView.safeAreaInsets,
+            navigationBarFrame: visibleFrame(of: navigationController?.navigationBar, in: webView),
+            barFrames: [hostViewController.tabBarController?.tabBar, toolbar].compactMap {
+                visibleFrame(of: $0, in: webView)
+            }
         )
         return ViewportMetrics(
             safeArea: ViewportSafeAreaMetrics(
-                viewport: viewportSafeAreaInsets,
-                legacyFallbackBaseline: legacyFallbackSafeAreaInsets
+                viewport: windowSafeAreaInsets,
+                legacyFallbackBaseline: webView.safeAreaInsets
             ),
-            topObscuredHeight: topObscuredHeight,
-            bottomObscuredHeight: bottomObscuredHeight,
+            obscuredInsets: geometry.obscuredInsets(includesNavigationBar: includesNavigationBar),
             keyboardOverlapHeight: keyboardOverlapHeight,
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight
         )
     }
 
-    private func projectedWindowSafeAreaInsets(in hostView: UIView?) -> UIEdgeInsets {
-        guard let hostView, let window = hostView.window else {
-            return .zero
+    private func visibleFrame(of view: UIView?, in webView: WKWebView) -> CGRect? {
+        guard let view, let window = webView.window, view.window === window else { return nil }
+        var ancestor: UIView? = view
+        while let current = ancestor {
+            guard !current.isHidden, current.alpha > 0 else { return nil }
+            ancestor = current.superview
         }
-
-        let hostRectInWindow = hostView.convert(hostView.bounds, to: window)
-        let safeRectInWindow = window.bounds.inset(by: window.safeAreaInsets)
-
-        return UIEdgeInsets(
-            top: max(0, safeRectInWindow.minY - hostRectInWindow.minY),
-            left: max(0, safeRectInWindow.minX - hostRectInWindow.minX),
-            bottom: max(0, hostRectInWindow.maxY - safeRectInWindow.maxY),
-            right: max(0, hostRectInWindow.maxX - safeRectInWindow.maxX)
-        )
-    }
-
-    private func resolvedVisibleToolbar(for hostViewController: UIViewController) -> UIToolbar? {
-        guard let navigationController = hostViewController.navigationController else {
-            return nil
-        }
-        guard navigationController.isToolbarHidden == false else {
-            return nil
-        }
-        return navigationController.toolbar
-    }
-
-    private func topEdgeObscuredHeight(
-        of chromeView: UIView?,
-        in hostView: UIView?
-    ) -> CGFloat {
-        guard let chromeView, let hostView else {
-            return 0
-        }
-        guard let window = hostView.window, chromeView.window != nil else {
-            return 0
-        }
-        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
-            return 0
-        }
-
-        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
-        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        let overlap = hostFrameInWindow.intersection(chromeFrameInWindow)
-        guard !overlap.isEmpty else {
-            return 0
-        }
-
-        return overlap.maxY - hostFrameInWindow.minY
-    }
-
-    private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
-        bottomEdgeObscuredHeight(of: [chromeView], in: hostView)
-    }
-
-    private func bottomEdgeObscuredHeight(
-        of chromeViews: [UIView?],
-        in hostView: UIView?,
-        extendingFrom trailingObscuredHeight: CGFloat = 0
-    ) -> CGFloat {
-        guard let hostView else {
-            return max(0, trailingObscuredHeight)
-        }
-        guard let window = hostView.window else {
-            return max(0, trailingObscuredHeight)
-        }
-
-        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
-        let chromeFramesInWindow = chromeViews.compactMap { chromeView -> CGRect? in
-            guard let chromeView, chromeView.window != nil else {
-                return nil
-            }
-            guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
-                return nil
-            }
-            return chromeView.convert(chromeView.bounds, to: window)
-        }
-
-        var obscuredMinY = hostFrameInWindow.maxY - max(0, trailingObscuredHeight)
-        var didExtend = true
-
-        while didExtend {
-            didExtend = false
-
-            for chromeFrameInWindow in chromeFramesInWindow {
-                guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
-                    continue
-                }
-                guard chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
-                    continue
-                }
-
-                let overlapMinY = max(hostFrameInWindow.minY, chromeFrameInWindow.minY)
-                let overlapMaxY = min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY)
-                guard overlapMaxY >= obscuredMinY else {
-                    continue
-                }
-                guard overlapMinY < obscuredMinY else {
-                    continue
-                }
-
-                obscuredMinY = overlapMinY
-                didExtend = true
-            }
-        }
-
-        return max(0, hostFrameInWindow.maxY - obscuredMinY)
-    }
-
-    private func effectiveAlpha(of view: UIView) -> CGFloat {
-        var alpha = view.alpha
-        var currentSuperview = view.superview
-
-        while let superview = currentSuperview {
-            if superview.isHidden {
-                return 0
-            }
-            alpha *= superview.alpha
-            currentSuperview = superview.superview
-        }
-
-        return alpha
+        return webView.convert(view.bounds, from: view)
     }
 }
 
 /// Coordinates a `WKWebView` viewport with UIKit safe areas, visible chrome, keyboard, and input accessory geometry.
 ///
 /// With `contentInsetAdjustmentBehavior` set to `.never`, the coordinator supplies
-/// the scroll view's content insets. On iOS 26 and later, these match the obscured
-/// content insets, including keyboard and input accessory overlap. Use
-/// ``additionalObscuredContentInsets`` for client-managed UI in this mode.
+/// a contribution to the scroll view's content insets. UIKit's refresh-control
+/// adjustments and client-supplied insets are preserved when that contribution
+/// changes or is removed. Use ``additionalObscuredContentInsets`` for native UI
+/// that also needs to reduce the web layout viewport.
 @MainActor
 public final class ViewportCoordinator: NSObject {
     /// The view controller that hosts the web view.
@@ -420,15 +243,7 @@ public final class ViewportCoordinator: NSObject {
         }
     }
 
-    /// The web view whose viewport is coordinated.
-    public weak var webView: WKWebView?
-
-    /// The safe area edges that should affect obscured content inset calculations.
-    public var obscuredContentInsetEdgesAffectedBySafeArea: UIRectEdge = [.top, .bottom] {
-        didSet {
-            updateViewport()
-        }
-    }
+    private weak var webView: WKWebView?
 
     /// Whether a visible navigation bar contributes to the obscured content insets.
     ///
@@ -437,9 +252,9 @@ public final class ViewportCoordinator: NSObject {
     /// and additional obscured insets are preserved. Set the scroll view's
     /// `contentInsetAdjustmentBehavior` to `.never` to also exclude UIKit's automatic
     /// navigation-bar adjustment. The coordinator does not change that property.
-    public var includesNavigationBarInObscuredInsets = true {
+    public var includesNavigationBar = true {
         didSet {
-            updateViewport()
+            update()
         }
     }
 
@@ -452,36 +267,21 @@ public final class ViewportCoordinator: NSObject {
         }
         set {
             storedAdditionalObscuredContentInsets = newValue.wk_clampedNonNegative
-            updateViewport()
+            update()
         }
     }
 
-    /// The behavior used when combining bottom bars with keyboard and input accessory overlap.
-    public var bottomBarObscurationBehavior: ViewportBottomBarObscurationBehavior = .includeWhenKeyboardOverlaps {
-        didSet {
-            updateViewport()
-        }
-    }
-
-    /// The scroll edge effects applied to the web view's scroll view.
-    public var scrollEdgeEffects = ViewportScrollEdgeEffects() {
-        didSet {
-            updateViewport()
-        }
-    }
-
+    private var isInvalidated = false
     private let metricsResolver = ViewportMetricsResolver()
     private var storedAdditionalObscuredContentInsets: UIEdgeInsets = .zero
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedViewportState: AppliedViewportState?
     private var observationView: ViewportObservationView?
-    private var observationViewConstraints: [NSLayoutConstraint] = []
     private var lastKnownWindowScreen: UIScreen?
     private weak var observedHostViewController: UIViewController?
     private var webViewStateCancellables: Set<AnyCancellable> = []
 #if DEBUG
     @objc dynamic private(set) var appliedViewportUpdateCountForTesting = 0
-    private var scrollEdgeEffectAssignmentCount = 0
     private var contentScrollViewRegistrationCount = 0
 #endif
 
@@ -496,10 +296,6 @@ public final class ViewportCoordinator: NSObject {
 
     var hasObservationViewForTesting: Bool {
         observationView != nil
-    }
-
-    var scrollEdgeEffectAssignmentCountForTesting: Int {
-        scrollEdgeEffectAssignmentCount
     }
 
     var contentScrollViewRegistrationCountForTesting: Int {
@@ -522,63 +318,39 @@ public final class ViewportCoordinator: NSObject {
     /// Creates a viewport coordinator for a web view.
     ///
     /// - Parameters:
-    ///   - hostViewController: The view controller that hosts the web view. Pass `nil` to resolve it automatically.
     ///   - webView: The web view whose viewport should be coordinated.
+    ///   - hostViewController: The view controller that hosts the web view. Pass `nil` to resolve it automatically.
     public init(
-        hostViewController: UIViewController? = nil,
-        webView: WKWebView
+        webView: WKWebView,
+        hostViewController: UIViewController? = nil
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
         super.init()
         observeKeyboardNotifications()
         observeWebViewStateIfPossible()
-        updateViewport()
-    }
-
-    /// Creates a viewport coordinator that resolves its host view controller automatically.
-    ///
-    /// - Parameter webView: The web view whose viewport should be coordinated.
-    public convenience init(webView: WKWebView) {
-        self.init(
-            hostViewController: nil,
-            webView: webView
-        )
+        update()
     }
 
     isolated deinit {
-        tearDownViewportCoordination(resetViewport: true)
+        tearDownViewportCoordination()
     }
 
-    /// Refreshes viewport state after the host view controller appears.
-    public func hostViewDidAppear() {
-        updateViewport()
-    }
-
-    /// Refreshes viewport state after the web view moves between superviews, windows, or screens.
-    public func webViewHierarchyDidChange() {
+    /// Recomputes the viewport after a change to the web view's layout or host.
+    ///
+    /// Forward layout, hierarchy, and safe-area changes here when using a custom
+    /// `WKWebView` subclass. ``ViewportWebView`` forwards these automatically.
+    /// Calling this after ``invalidate()`` has no effect.
+    public func update() {
         let currentScreen = webView?.window?.screen
         if let currentScreen, let lastKnownWindowScreen, lastKnownWindowScreen !== currentScreen {
             keyboardFrameInScreen = .null
         }
-        if let currentScreen {
-            lastKnownWindowScreen = currentScreen
-        }
-        updateViewport(force: true)
-    }
-
-    /// Refreshes viewport state after the web view's safe area insets change.
-    public func webViewSafeAreaInsetsDidChange() {
-        updateViewport(force: true)
-    }
-
-    /// Recomputes and applies the current viewport state.
-    public func updateViewport() {
         updateViewport(force: false)
     }
 
     private func updateViewport(force: Bool) {
-        guard let webView else {
+        guard !isInvalidated, let webView else {
             return
         }
         guard
@@ -610,23 +382,19 @@ public final class ViewportCoordinator: NSObject {
         installObservationViewIfPossible(in: observationContainerView)
         updateObservedHostViewControllerIfNeeded(hostViewController, webView: webView)
 
-        applyScrollEdgeEffects(to: webView.scrollView)
         registerContentScrollViewIfNeeded(
             webView.scrollView,
             on: hostViewController
         )
 
-        let metricsHostView = resolvedMetricsHostView(webView: webView, hostViewController: hostViewController)
         var effectiveMetrics = metricsResolver.makeViewportMetrics(
             in: hostViewController,
             webView: webView,
-            keyboardOverlapHeight: keyboardOverlapHeight(in: metricsHostView),
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: metricsHostView),
-            includesNavigationBarInObscuredInsets: includesNavigationBarInObscuredInsets
+            keyboardOverlapHeight: keyboardOverlapHeight(in: webView),
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: webView),
+            includesNavigationBar: includesNavigationBar
         )
-        effectiveMetrics.obscuredContentInsetEdgesAffectedBySafeArea = obscuredContentInsetEdgesAffectedBySafeArea
         effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
-        effectiveMetrics.bottomBarObscurationBehavior = bottomBarObscurationBehavior
 
         let screenScale = observationContainerView.window?.screen.scale
             ?? webView.window?.screen.scale
@@ -658,24 +426,15 @@ public final class ViewportCoordinator: NSObject {
 
         let previousContentScrollInset = lastAppliedViewportState?.contentScrollInset
         lastAppliedViewportState = appliedViewportState
+        updateContentInsetContribution(
+            from: previousContentScrollInset ?? .zero,
+            to: contentScrollInset ?? .zero,
+            on: webView.scrollView
+        )
         if #available(iOS 26.0, *) {
-            // WebKit takes the maximum of its obscured inset and UIKit's system
-            // inset when sizing the layout viewport. They must describe the same
-            // geometry when UIKit's automatic adjustment is disabled.
-            if let contentScrollInset {
-                if webView.scrollView.contentInset != contentScrollInset {
-                    webView.scrollView.contentInset = contentScrollInset
-                }
-            } else if previousContentScrollInset != nil {
-                webView.scrollView.contentInset = .zero
-            }
             webView.obscuredContentInsets = resolvedMetrics.obscuredInsets
             ViewportSPIBridge.apply(
                 unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
-                to: webView
-            )
-            ViewportSPIBridge.apply(
-                obscuredSafeAreaEdges: resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea,
                 to: webView
             )
         } else {
@@ -690,64 +449,44 @@ public final class ViewportCoordinator: NSObject {
 #endif
     }
 
-    /// Stops observation and resets the viewport state applied to the web view.
+    /// Permanently stops coordination and releases its inset contribution and
+    /// WebKit overrides. The scroll view's adjustment behavior is preserved.
     ///
-    /// Content insets supplied while automatic adjustment was disabled are reset
-    /// to zero. The scroll view's content inset adjustment behavior is preserved.
+    /// Create a new coordinator to start coordinating this web view again.
     public func invalidate() {
-        tearDownViewportCoordination(resetViewport: true)
+        tearDownViewportCoordination()
     }
 
-    private func tearDownViewportCoordination(resetViewport: Bool) {
+    private func tearDownViewportCoordination() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
         clearObservationViewIfNeeded()
-
-        guard let webView else {
-            return
-        }
-
-        if resetViewport {
+        if let webView {
             resetAppliedViewportInsets(on: webView)
+            clearObservedScrollViewIfNeeded(on: observedHostViewController, webView: webView)
         }
-        clearObservedScrollViewIfNeeded(on: observedHostViewController ?? hostViewController, webView: webView)
         observedHostViewController = nil
         lastAppliedViewportState = nil
         lastKnownWindowScreen = nil
     }
 
-    private func applyScrollEdgeEffects(to scrollView: UIScrollView) {
-        if #available(iOS 26.0, *) {
-            apply(
-                scrollEdgeEffects.top,
-                to: scrollView.topEdgeEffect
-            )
-            apply(
-                scrollEdgeEffects.bottom,
-                to: scrollView.bottomEdgeEffect
-            )
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private func apply(
-        _ configuration: ViewportScrollEdgeEffect,
-        to edgeEffect: UIScrollEdgeEffect
+    private func updateContentInsetContribution(
+        from previous: UIEdgeInsets,
+        to current: UIEdgeInsets,
+        on scrollView: UIScrollView
     ) {
-        if edgeEffect.isHidden != configuration.isHidden {
-            edgeEffect.isHidden = configuration.isHidden
-#if DEBUG
-            scrollEdgeEffectAssignmentCount += 1
-#endif
-        }
-
-        let style = configuration.style.uiKitStyle
-        if edgeEffect.style != style {
-            edgeEffect.style = style
-#if DEBUG
-            scrollEdgeEffectAssignmentCount += 1
-#endif
-        }
+        guard previous != current else { return }
+        // UIRefreshControl temporarily changes contentInset. Replacing the
+        // entire value here loses that adjustment and corrupts its restoration.
+        let insets = scrollView.contentInset
+        scrollView.contentInset = UIEdgeInsets(
+            top: insets.top + current.top - previous.top,
+            left: insets.left + current.left - previous.left,
+            bottom: insets.bottom + current.bottom - previous.bottom,
+            right: insets.right + current.right - previous.right
+        )
     }
 
     private func registerContentScrollViewIfNeeded(
@@ -768,14 +507,6 @@ public final class ViewportCoordinator: NSObject {
 #endif
     }
 
-    private func installObservationViewIfPossible() {
-        guard let observationContainerView = resolvedObservationContainerView() else {
-            return
-        }
-
-        installObservationViewIfPossible(in: observationContainerView)
-    }
-
     private func installObservationViewIfPossible(in hostView: UIView) {
         if observationView?.superview === hostView {
             return
@@ -783,15 +514,15 @@ public final class ViewportCoordinator: NSObject {
 
         clearObservationViewIfNeeded()
 
-        let observationView = ViewportObservationView()
+        let observationView = ViewportObservationView(frame: hostView.bounds)
         self.observationView = observationView
         observationView.onViewportGeometryChanged = { [weak self, weak observationView] in
             guard let self, let observationView, self.observationView === observationView else {
                 return
             }
-            self.updateViewport()
+            self.update()
         }
-        observationView.translatesAutoresizingMaskIntoConstraints = false
+        observationView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         observationView.isUserInteractionEnabled = false
         observationView.backgroundColor = .clear
         if #available(iOS 15.0, *) {
@@ -800,25 +531,12 @@ public final class ViewportCoordinator: NSObject {
         hostView.addSubview(observationView)
         hostView.sendSubviewToBack(observationView)
 
-        let constraints = [
-            observationView.topAnchor.constraint(equalTo: hostView.topAnchor),
-            observationView.leadingAnchor.constraint(equalTo: hostView.leadingAnchor),
-            observationView.trailingAnchor.constraint(equalTo: hostView.trailingAnchor),
-            observationView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor)
-        ]
-        observationViewConstraints = constraints
-        NSLayoutConstraint.activate(constraints)
-
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
     }
 
     private func resolvedObservationContainerView() -> UIView? {
         webView?.superview
-    }
-
-    private func resolvedMetricsHostView(webView: WKWebView, hostViewController: UIViewController) -> UIView? {
-        webView.superview ?? hostViewController.viewIfLoaded
     }
 
     private func clearInactiveViewportStateIfNeeded(
@@ -834,26 +552,22 @@ public final class ViewportCoordinator: NSObject {
     }
 
     private func clearObservationViewIfNeeded() {
-        NSLayoutConstraint.deactivate(observationViewConstraints)
-        observationViewConstraints.removeAll()
         observationView?.onViewportGeometryChanged = nil
         observationView?.removeFromSuperview()
         observationView = nil
     }
 
     private func resetAppliedViewportInsets(on webView: WKWebView) {
+        guard let lastAppliedViewportState else { return }
+        updateContentInsetContribution(
+            from: lastAppliedViewportState.contentScrollInset ?? .zero,
+            to: .zero,
+            on: webView.scrollView
+        )
         if #available(iOS 26.0, *) {
-            if lastAppliedViewportState?.contentScrollInset != nil {
-                webView.scrollView.contentInset = .zero
-            }
-            webView.obscuredContentInsets = .zero
-            ViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: webView)
-            ViewportSPIBridge.apply(obscuredSafeAreaEdges: [], to: webView)
+            ViewportSPIBridge.resetViewportOverrides(on: webView)
         } else {
-            _ = ViewportSPIBridge.resetLegacyViewportFallback(
-                on: webView.scrollView,
-                webView: webView
-            )
+            ViewportSPIBridge.resetLegacyViewportFallback(on: webView.scrollView, webView: webView)
         }
     }
 
@@ -953,20 +667,20 @@ public final class ViewportCoordinator: NSObject {
             frameIntersectionHeight = 0
         }
 
-        return max(frameIntersectionHeight, keyboardLayoutGuideCoverageHeight())
+        return max(frameIntersectionHeight, keyboardLayoutGuideCoverageHeight(in: hostView))
     }
 
-    private func keyboardLayoutGuideCoverageHeight() -> CGFloat {
-        guard let observationView else {
+    private func keyboardLayoutGuideCoverageHeight(in hostView: UIView?) -> CGFloat {
+        guard let observationView, let hostView else {
             return 0
         }
 
         if #available(iOS 15.0, *) {
-            let layoutFrame = observationView.keyboardLayoutGuide.layoutFrame
+            let layoutFrame = observationView.bounds.intersection(observationView.keyboardLayoutGuide.layoutFrame)
             guard layoutFrame.isEmpty == false else {
                 return 0
             }
-            return max(0, observationView.bounds.intersection(layoutFrame).height)
+            return max(0, hostView.bounds.intersection(hostView.convert(layoutFrame, from: observationView)).height)
         }
 
         return 0
@@ -1032,7 +746,7 @@ public final class ViewportCoordinator: NSObject {
         if resetFrame {
             keyboardFrameInScreen = .null
         }
-        updateViewport()
+        update()
     }
 }
 
@@ -1104,18 +818,4 @@ private extension UIEdgeInsets {
     }
 }
 
-@MainActor
-@available(iOS 26.0, *)
-private extension ViewportScrollEdgeEffect.Style {
-    var uiKitStyle: UIScrollEdgeEffect.Style {
-        switch self {
-        case .automatic:
-            .automatic
-        case .hard:
-            .hard
-        case .soft:
-            .soft
-        }
-    }
-}
 #endif

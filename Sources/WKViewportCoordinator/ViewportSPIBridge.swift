@@ -14,18 +14,14 @@ enum ViewportSPISelectorNames {
     // obfuscated values so selector updates remain reviewable.
     // Original: _setUnobscuredSafeAreaInsets:
     static let setUnobscuredSafeAreaInsets = deobfuscate([":", "Insets", "Area", "Safe", "Unobscured", "set", "_"])
-    // Original: _setObscuredInsetEdgesAffectedBySafeArea:
-    static let setObscuredInsetEdgesAffectedBySafeArea = deobfuscate([
-        ":", "Area", "Safe", "By", "Affected", "Edges", "Inset", "Obscured", "set", "_"
-    ])
+    // Original: _resetObscuredInsets
+    static let resetObscuredInsets = deobfuscate(["Insets", "Obscured", "reset", "_"])
+    // Original: _resetUnobscuredSafeAreaInsets
+    static let resetUnobscuredSafeAreaInsets = deobfuscate(["Insets", "Area", "Safe", "Unobscured", "reset", "_"])
     // Original: _setObscuredInsets:
     static let setObscuredInsets = deobfuscate([":", "Insets", "Obscured", "set", "_"])
     // Original: _setObscuredInsetsInternal:
     static let setObscuredInsetsInternal = deobfuscate([":", "Internal", "Insets", "Obscured", "set", "_"])
-    // Original: _setContentScrollInset:
-    static let setContentScrollInset = deobfuscate([":", "Inset", "Scroll", "Content", "set", "_"])
-    // Original: _setContentScrollInsetInternal:
-    static let setContentScrollInsetInternal = deobfuscate([":", "Internal", "Inset", "Scroll", "Content", "set", "_"])
     // Original: _overrideLayoutParametersWithMinimumLayoutSize:maximumUnobscuredSizeOverride:
     static let overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride = deobfuscate([
         ":", "Override", "Size", "Unobscured", "maximum", ":",
@@ -51,12 +47,6 @@ enum ViewportSPISelectorNames {
 
 @MainActor
 private enum ViewportSPIMethods {
-    static let setContentScrollInset = ViewportSPIMethod(
-        ViewportSPISelectorNames.setContentScrollInset, as: ((UIEdgeInsets) -> Void).self
-    )
-    static let setContentScrollInsetInternal = ViewportSPIMethod(
-        ViewportSPISelectorNames.setContentScrollInsetInternal, as: ((UIEdgeInsets) -> Bool).self
-    )
     static let setObscuredInsets = ViewportSPIMethod(
         ViewportSPISelectorNames.setObscuredInsets, as: ((UIEdgeInsets) -> Void).self
     )
@@ -66,8 +56,11 @@ private enum ViewportSPIMethods {
     static let setUnobscuredSafeAreaInsets = ViewportSPIMethod(
         ViewportSPISelectorNames.setUnobscuredSafeAreaInsets, as: ((UIEdgeInsets) -> Void).self
     )
-    static let setObscuredInsetEdgesAffectedBySafeArea = ViewportSPIMethod(
-        ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea, as: ((UInt) -> Void).self
+    static let resetObscuredInsets = ViewportSPIMethod(
+        ViewportSPISelectorNames.resetObscuredInsets, as: (() -> Void).self
+    )
+    static let resetUnobscuredSafeAreaInsets = ViewportSPIMethod(
+        ViewportSPISelectorNames.resetUnobscuredSafeAreaInsets, as: (() -> Void).self
     )
     static let fullLayoutOverride = ViewportSPIMethod(
         ViewportSPISelectorNames.overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride,
@@ -124,39 +117,6 @@ private final class ViewportSPIMethod<Result, each Argument> {
     }
 }
 
-// Values applied as the pre-iOS 26 WebKit viewport fallback. Grouping them
-// keeps reset and apply paths explicit without passing parallel argument lists.
-private struct LegacyViewportSPIState {
-    var contentScrollInset: UIEdgeInsets
-    var obscuredInsets: UIEdgeInsets
-    var unobscuredSafeAreaInsets: UIEdgeInsets
-    var obscuredSafeAreaEdges: UIRectEdge
-    var layoutOverrideMode: LayoutOverrideMode
-
-    enum LayoutOverrideMode {
-        case apply
-        case reset
-    }
-
-    static func applying(_ resolvedMetrics: ResolvedViewportMetrics) -> Self {
-        Self(
-            contentScrollInset: resolvedMetrics.contentScrollInsetFallback,
-            obscuredInsets: resolvedMetrics.obscuredInsets,
-            unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
-            obscuredSafeAreaEdges: resolvedMetrics.obscuredContentInsetEdgesAffectedBySafeArea,
-            layoutOverrideMode: .apply
-        )
-    }
-
-    static let reset = Self(
-        contentScrollInset: .zero,
-        obscuredInsets: .zero,
-        unobscuredSafeAreaInsets: .zero,
-        obscuredSafeAreaEdges: [],
-        layoutOverrideMode: .reset
-    )
-}
-
 // WebKit builds expose either two or three layout-size arguments.
 @MainActor
 private enum LegacyLayoutOverrideSPI {
@@ -203,77 +163,35 @@ enum ViewportSPIBridge {
         to scrollView: NSObject,
         webView: NSObject
     ) -> Bool {
-        applyLegacyViewportState(
-            .applying(resolvedMetrics),
-            to: scrollView,
-            webView: webView
-        )
+        let obscured = applyObscuredInsets(resolvedMetrics.obscuredInsets, to: webView)
+        let safeArea = apply(unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets, to: webView)
+        let layout = perform {
+            try LegacyLayoutOverrideSPI.apply(
+                obscuredInsets: resolvedMetrics.obscuredInsets, to: webView, scrollView: scrollView
+            )
+        } ?? false
+        frameOrBoundsMayHaveChanged(on: webView)
+        return obscured && safeArea && layout
     }
 
     @discardableResult
-    static func resetLegacyViewportFallback(
-        on scrollView: NSObject,
-        webView: NSObject
-    ) -> Bool {
-        applyLegacyViewportState(.reset, to: scrollView, webView: webView)
-    }
-
-    private static func applyLegacyViewportState(
-        _ state: LegacyViewportSPIState,
-        to scrollView: NSObject,
-        webView: NSObject
-    ) -> Bool {
-        let didApplyContentScrollInset = applyContentScrollInset(
-            state.contentScrollInset,
-            to: scrollView
-        )
-        let didApplyObscuredInsets = applyObscuredInsets(
-            state.obscuredInsets,
-            to: webView
-        )
-        let didApplyUnobscuredSafeAreaInsets = apply(
-            unobscuredSafeAreaInsets: state.unobscuredSafeAreaInsets,
-            to: webView
-        )
-        let didApplyObscuredSafeAreaEdges = apply(
-            obscuredSafeAreaEdges: state.obscuredSafeAreaEdges,
-            to: webView
-        )
-        let didApplyLayoutOverride = applyLayoutOverride(
-            state.layoutOverrideMode,
-            obscuredInsets: state.obscuredInsets,
-            to: webView,
-            scrollView: scrollView
-        )
-
-        guard
-            didApplyContentScrollInset
-                || didApplyObscuredInsets
-                || didApplyUnobscuredSafeAreaInsets
-                || didApplyObscuredSafeAreaEdges
-                || didApplyLayoutOverride
-        else {
-            return false
-        }
-
+    static func resetLegacyViewportFallback(on scrollView: NSObject, webView: NSObject) -> Bool {
+        let viewport = resetViewportOverrides(on: webView)
+        let layout = perform { try LegacyLayoutOverrideSPI.reset(on: webView, scrollView: scrollView) } ?? false
         frameOrBoundsMayHaveChanged(on: webView)
-        return true
+        return viewport && layout
     }
 
-    private static func applyLayoutOverride(
-        _ mode: LegacyViewportSPIState.LayoutOverrideMode,
-        obscuredInsets: UIEdgeInsets,
-        to webView: NSObject,
-        scrollView: NSObject
-    ) -> Bool {
-        perform {
-            switch mode {
-            case .apply:
-                try LegacyLayoutOverrideSPI.apply(obscuredInsets: obscuredInsets, to: webView, scrollView: scrollView)
-            case .reset:
-                try LegacyLayoutOverrideSPI.reset(on: webView, scrollView: scrollView)
-            }
-        } ?? false
+    @discardableResult
+    static func resetViewportOverrides(on webView: NSObject) -> Bool {
+        // Setting zero leaves WebKit's explicit-override flags enabled. Release
+        // both flags so later safe-area and viewport-fit changes work normally.
+        let obscured = perform { try ViewportSPIMethods.resetObscuredInsets.invoke(on: webView) } != nil
+        let safeArea = perform { try ViewportSPIMethods.resetUnobscuredSafeAreaInsets.invoke(on: webView) } != nil
+        if !obscured || !safeArea {
+            logger.error("WebKit could not release viewport overrides (obscured: \(obscured), safe area: \(safeArea))")
+        }
+        return obscured && safeArea
     }
 
     private static func applyObscuredInsets(_ insets: UIEdgeInsets, to object: NSObject) -> Bool {
@@ -283,23 +201,9 @@ enum ViewportSPIBridge {
         } != nil
     }
 
-    private static func applyContentScrollInset(_ insets: UIEdgeInsets, to object: NSObject) -> Bool {
-        perform {
-            if try ViewportSPIMethods.setContentScrollInset.invoke(on: object, insets) != nil {
-                return true
-            }
-            return try ViewportSPIMethods.setContentScrollInsetInternal.invoke(on: object, insets) != nil
-        } ?? false
-    }
-
     @discardableResult
     static func apply(unobscuredSafeAreaInsets insets: UIEdgeInsets, to object: NSObject) -> Bool {
         perform { try ViewportSPIMethods.setUnobscuredSafeAreaInsets.invoke(on: object, insets) } != nil
-    }
-
-    @discardableResult
-    static func apply(obscuredSafeAreaEdges edges: UIRectEdge, to object: NSObject) -> Bool {
-        perform { try ViewportSPIMethods.setObscuredInsetEdgesAffectedBySafeArea.invoke(on: object, edges.rawValue) } != nil
     }
 
     private static func frameOrBoundsMayHaveChanged(on object: NSObject) {

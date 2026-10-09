@@ -49,7 +49,6 @@ final class MiniBrowserHarnessState {
     nonisolated enum Scenario: String, CaseIterable, Codable, Sendable {
         case standard
         case neverAdjustment
-        case excludeTopSafeArea
 
         var displayName: String {
             switch self {
@@ -57,8 +56,6 @@ final class MiniBrowserHarnessState {
                 "Standard"
             case .neverAdjustment:
                 "Never Adjustment"
-            case .excludeTopSafeArea:
-                "Exclude Top Safe Area"
             }
         }
 
@@ -182,7 +179,7 @@ final class MiniBrowserHarnessState {
         var status: String
     }
 
-    let webView: ManagedViewportWebView
+    let webView: ViewportWebView
     let selfTestMode: SelfTestMode?
     private let selfTestInputDelegate: MiniBrowserSelfTestInputDelegate?
     private let selfTestInputDelegateInstalled: Bool
@@ -200,7 +197,7 @@ final class MiniBrowserHarnessState {
         let selfTestInputDelegate = selfTestMode == .viewport ? MiniBrowserSelfTestInputDelegate() : nil
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        let webView = ManagedViewportWebView(frame: .zero, configuration: configuration)
+        let webView = ViewportWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
         let selfTestInputDelegateInstalled = selfTestInputDelegate.map {
@@ -527,13 +524,8 @@ final class MiniBrowserHarnessState {
         switch scenario {
         case .standard:
             webView.scrollView.contentInsetAdjustmentBehavior = .automatic
-            webView.viewportObscuredContentInsetEdgesAffectedBySafeArea = [.top, .bottom]
         case .neverAdjustment:
             webView.scrollView.contentInsetAdjustmentBehavior = .never
-            webView.viewportObscuredContentInsetEdgesAffectedBySafeArea = [.top, .bottom]
-        case .excludeTopSafeArea:
-            webView.scrollView.contentInsetAdjustmentBehavior = .automatic
-            webView.viewportObscuredContentInsetEdgesAffectedBySafeArea = [.bottom]
         }
     }
 
@@ -614,7 +606,8 @@ final class MiniBrowserHarnessState {
             guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
                 return nil
             }
-            return chromeView.convert(chromeView.bounds, to: window)
+            let frame = chromeView.convert(chromeView.bounds, to: window)
+            return frame.width >= frame.height ? frame : nil
         }
 
         var obscuredMinY = hostFrameInWindow.maxY - max(0, trailingObscuredHeight)
@@ -767,7 +760,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        state.webView.viewportHostViewController = self
+        state.webView.viewportCoordinator.hostViewController = self
         state.webView.navigationDelegate = self
         beginObservation()
         render()
@@ -852,7 +845,7 @@ final class MiniBrowserHarnessViewController: UIViewController {
             webView.bottomAnchor.constraint(equalTo: webViewContainerView.bottomAnchor)
         ]
         NSLayoutConstraint.activate(webViewConstraints)
-        webView.viewportHostViewController = self
+        webView.viewportCoordinator.hostViewController = self
     }
 
     private func detachWebViewIfNeeded() {
@@ -1183,25 +1176,6 @@ private extension MiniBrowserHarnessViewController {
             "navigation did not reduce visual viewport height: initial=\(initialPage.viewportHeight), navigation=\(chromeVisiblePage.viewportHeight)",
             checks: &checks
         )
-
-        state.applyScenario(.excludeTopSafeArea)
-        render()
-        let excluded = try await refreshSnapshot(includePage: true)
-        recordSelfTestSnapshot("excludeTopSafeArea", excluded)
-        let excludedPage = try requirePage(excluded.page)
-        try check("exclude top scenario", excluded.native.scenario == MiniBrowserHarnessState.Scenario.excludeTopSafeArea.rawValue, checks: &checks)
-        try checkFixedBottomWithinViewport("exclude top", excludedPage, checks: &checks)
-        try check(
-            "exclude top page stability",
-            abs(excludedPage.topMarkerTop - chromeVisiblePage.topMarkerTop) <= 2,
-            "excludeTopSafeArea changed topMarkerTop: visible=\(chromeVisiblePage.topMarkerTop), excluded=\(excludedPage.topMarkerTop)",
-            checks: &checks
-        )
-
-        state.applyScenario(.standard)
-        render()
-        let standardRestored = try await refreshSnapshot(includePage: true)
-        recordSelfTestSnapshot("standardRestored", standardRestored)
 
         state.applyChromeMode(.navigationBarHidden)
         render()

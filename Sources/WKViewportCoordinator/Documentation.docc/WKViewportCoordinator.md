@@ -1,29 +1,25 @@
 # ``WKViewportCoordinator``
 
-Coordinate `WKWebView` viewport geometry with UIKit safe areas, visible chrome, keyboard, and input accessory overlap.
+Coordinate a web view's layout viewport with its UIKit host.
 
 ## Overview
 
-`WKViewportCoordinator` keeps a `WKWebView` viewport aligned with the UIKit view hierarchy that hosts it. It measures the host window safe area, visible navigation and bottom chrome, keyboard coverage, and input accessory geometry, then applies the resulting viewport state to the web view.
+Use ``ViewportWebView`` to keep web content inside the window and container safe areas. The coordinator measures geometry in the web view's coordinate space, including native bars at the top, bottom, or sides and keyboard and input accessory overlap.
 
-Use ``ManagedViewportWebView`` for the standard integration path. The subclass installs a coordinator and forwards hierarchy and safe-area lifecycle updates automatically.
+``ViewportWebView`` owns a ``ViewportCoordinator`` and forwards layout, hierarchy, and safe-area changes. Configure viewport behavior through ``ViewportWebView/viewportCoordinator``; configure scroll behavior and appearance through the inherited `scrollView` property.
 
-Use ``ViewportCoordinator`` directly when you already own a custom `WKWebView` subclass. In that case, forward hierarchy and safe-area changes to the coordinator so it can recompute viewport metrics at the same points as ``ManagedViewportWebView``.
+Use ``ViewportCoordinator`` directly for an existing web view subclass. Retain it and call ``ViewportCoordinator/update()`` from the web view's layout, hierarchy, and safe-area callbacks. Set ``ViewportCoordinator/hostViewController`` when the responder chain does not identify the intended host.
 
-> Warning: This package uses undocumented WebKit runtime behavior for legacy viewport fallback support. Validate it carefully before shipping in App Store-bound apps.
+The coordinator adds its scroll inset contribution without replacing insets owned by the application or UIKit. Calling ``ViewportCoordinator/invalidate()`` removes that contribution, releases WebKit overrides, and permanently stops observation. The scroll view's automatic adjustment setting is preserved.
+
+> Warning: This package uses undocumented WebKit APIs. Unavailable SPI can leave viewport updates or restoration incomplete. Validate behavior on each supported OS version.
 
 ## Topics
 
-### Managed Integration
+### Automatic coordination
 
-- ``ManagedViewportWebView``
+- ``ViewportWebView``
 
-### Manual Coordination
+### Existing web views
 
 - ``ViewportCoordinator``
-
-### Runtime Options
-
-- ``ViewportBottomBarObscurationBehavior``
-- ``ViewportScrollEdgeEffects``
-- ``ViewportScrollEdgeEffect``
