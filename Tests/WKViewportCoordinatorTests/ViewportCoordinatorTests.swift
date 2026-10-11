@@ -83,6 +83,60 @@ struct ViewportCoordinatorTests {
         #expect(metrics.obscuredInsets == .zero)
     }
 
+    @Test(arguments: [UIScrollView.ContentInsetAdjustmentBehavior.never, .always])
+    func movingHostOutsideWindowDoesNotAddHorizontalInsets(
+        adjustment: UIScrollView.ContentInsetAdjustmentBehavior
+    ) throws {
+        let controller = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: controller.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = adjustment
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = ViewportCoordinator(webView: webView, hostViewController: controller)
+        defer { coordinator.invalidate() }
+        let baseline = try #require(coordinator.resolvedMetricsForTesting).obscuredInsets
+        let baselineContentInset = webView.scrollView.contentInset
+
+        // Model dismissal, cancellation, and a second dismissal in both directions.
+        for offset: CGFloat in [-100, -50, 0, -100, 0, 100, 50, 0] {
+            controller.view.transform = CGAffineTransform(translationX: offset, y: 0)
+            coordinator.update()
+            #expect(coordinator.resolvedMetricsForTesting?.obscuredInsets == baseline)
+            #expect(webView.scrollView.contentInset == baselineContentInset)
+        }
+    }
+
+    @Test
+    func windowSafeAreaProjectionExcludesOffWindowClipping() {
+        let window = CGRect(x: 0, y: 0, width: 400, height: 600)
+        let insets = UIEdgeInsets(top: 40, left: 20, bottom: 30, right: 10)
+        let safeArea = window.inset(by: insets)
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 600)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(in: bounds, windowBounds: window, safeArea: safeArea) == insets)
+
+        let shiftedWindow = window.offsetBy(dx: 100, dy: 100)
+        let shiftedSafeArea = safeArea.offsetBy(dx: 100, dy: 100)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: shiftedWindow, safeArea: shiftedSafeArea
+        ) == UIEdgeInsets(top: 40, left: 20, bottom: 0, right: 0))
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: window.offsetBy(dx: -100, dy: -100),
+            safeArea: safeArea.offsetBy(dx: -100, dy: -100)
+        ) == UIEdgeInsets(top: 0, left: 0, bottom: 30, right: 10))
+
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: CGRect(x: 5, y: 10, width: 300, height: 400), windowBounds: window, safeArea: safeArea
+        ) == UIEdgeInsets(top: 30, left: 15, bottom: 0, right: 0))
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: CGRect(x: 100, y: 100, width: 200, height: 300), windowBounds: window, safeArea: safeArea
+        ) == .zero)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: window.offsetBy(dx: 100, dy: 100),
+            safeArea: window.offsetBy(dx: 100, dy: 100)
+        ) == .zero)
+    }
+
     @Test
     @available(iOS 26.0, *)
     func refreshInsetSurvivesViewportUpdatesAndInvalidation() throws {
@@ -105,83 +159,6 @@ struct ViewportCoordinatorTests {
         #expect(webView.scrollView.contentInset == UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0))
         webView.scrollView.contentInset.top -= 60
         #expect(webView.scrollView.contentInset == .zero)
-    }
-
-    @Test(arguments: [UIScrollView.ContentInsetAdjustmentBehavior.never, .always])
-    func coordinatorDoesNotApplyTransitionOffsets(
-        adjustment: UIScrollView.ContentInsetAdjustmentBehavior
-    ) throws {
-        let controller = TransitionReportingViewController()
-        let webView = WKWebView(frame: .zero)
-        attach(webView, to: controller.view)
-        webView.scrollView.contentInsetAdjustmentBehavior = adjustment
-        let window = makeWindow(rootViewController: controller)
-        defer { window.isHidden = true; window.rootViewController = nil }
-        let coordinator = ViewportCoordinator(webView: webView, hostViewController: controller)
-        defer { coordinator.invalidate() }
-        let baseline = try #require(coordinator.resolvedMetricsForTesting)
-        let baselineContentInset = webView.scrollView.contentInset
-
-        // A cancelled dismissal is followed by another dismissal of the same page.
-        for cancelled in [true, false] {
-            let transition = TestTransitionCoordinator(containerView: window)
-            controller.reportedTransitionCoordinator = transition
-            controller.view.transform = CGAffineTransform(translationX: -100, y: 0)
-            let transient = ViewportMetricsResolver().makeViewportMetrics(
-                in: controller, webView: webView, keyboardOverlapHeight: 0, inputAccessoryOverlapHeight: 0
-            )
-            #expect(transient.obscuredInsets.left > baseline.obscuredInsets.left)
-            coordinator.update()
-            coordinator.hostViewController = controller
-            #expect(coordinator.resolvedMetricsForTesting == baseline)
-            #expect(webView.scrollView.contentInset == baselineContentInset)
-
-            transition.finish(cancelled: cancelled)
-            controller.reportedTransitionCoordinator = nil
-            controller.view.transform = .identity
-            coordinator.update()
-            #expect(coordinator.resolvedMetricsForTesting == baseline)
-            #expect(webView.scrollView.contentInset == baselineContentInset)
-        }
-    }
-
-    @Test(arguments: [false, true], [false, true])
-    func coordinatorUpdatesAfterTransitionCompletion(
-        cancelled: Bool,
-        animationsQueued: Bool
-    ) async throws {
-        for changesInsets in [false, true] {
-            let controller = TransitionReportingViewController()
-            let webView = WKWebView(frame: .zero)
-            attach(webView, to: controller.view)
-            webView.scrollView.contentInsetAdjustmentBehavior = .never
-            let window = makeWindow(rootViewController: controller)
-            defer { window.isHidden = true; window.rootViewController = nil }
-            let coordinator = ViewportCoordinator(webView: webView, hostViewController: controller)
-            defer { coordinator.invalidate() }
-            let baseline = try #require(coordinator.resolvedMetricsForTesting)
-            let transition = TestTransitionCoordinator(containerView: window, animationsQueued: animationsQueued)
-            controller.reportedTransitionCoordinator = transition
-            controller.view.transform = CGAffineTransform(translationX: -100, y: 0)
-            coordinator.additionalObscuredContentInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: changesInsets ? 24 : 0)
-            coordinator.handleObservedWebViewStateChangeForTesting()
-            #expect(coordinator.resolvedMetricsForTesting == baseline)
-
-            let update = XCTKVOExpectation(
-                keyPath: #keyPath(ViewportCoordinator.appliedViewportUpdateCountForTesting),
-                object: coordinator
-            )
-            // UIKit can still expose its coordinator while invoking completion blocks.
-            transition.finish(cancelled: cancelled)
-            controller.reportedTransitionCoordinator = nil
-            controller.view.transform = .identity
-            let result = await XCTWaiter.fulfillment(of: [update], timeout: 10)
-            try #require(result == .completed)
-            let updated = try #require(coordinator.resolvedMetricsForTesting)
-            #expect(updated.obscuredInsets.left == baseline.obscuredInsets.left)
-            #expect(updated.obscuredInsets.right == baseline.obscuredInsets.right + (changesInsets ? 24 : 0))
-            #expect(webView.scrollView.contentInset == updated.obscuredInsets)
-        }
     }
 
     @Test
@@ -1931,67 +1908,6 @@ private final class TestInputBoundsSPIObject: NSObject {
 
     @objc(_inputViewBoundsInWindow)
     func inputViewBoundsInWindow() -> CGRect { boundsInWindow }
-}
-
-@MainActor
-private final class TransitionReportingViewController: UIViewController {
-    var reportedTransitionCoordinator: (any UIViewControllerTransitionCoordinator)?
-
-    override var transitionCoordinator: (any UIViewControllerTransitionCoordinator)? {
-        super.transitionCoordinator ?? reportedTransitionCoordinator
-    }
-}
-
-@MainActor
-private final class TestTransitionCoordinator: NSObject, UIViewControllerTransitionCoordinator {
-    let containerView: UIView
-    let animationsQueued: Bool
-    let isAnimated = true
-    let presentationStyle = UIModalPresentationStyle.fullScreen
-    let initiallyInteractive = true
-    let isInterruptible = true
-    private(set) var isInteractive = true
-    private(set) var isCancelled = false
-    let transitionDuration: TimeInterval = 0.3
-    let percentComplete: CGFloat = 0.5
-    let completionVelocity: CGFloat = 0
-    let completionCurve = UIView.AnimationCurve.easeInOut
-    let targetTransform = CGAffineTransform.identity
-    private var completions: [(any UIViewControllerTransitionCoordinatorContext) -> Void] = []
-
-    init(containerView: UIView, animationsQueued: Bool = true) {
-        self.containerView = containerView
-        self.animationsQueued = animationsQueued
-    }
-
-    func animate(
-        alongsideTransition animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
-        completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
-    ) -> Bool {
-        if let completion { completions.append(completion) }
-        return animationsQueued
-    }
-
-    func animateAlongsideTransition(
-        in view: UIView?,
-        animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
-        completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
-    ) -> Bool {
-        animate(alongsideTransition: animation, completion: completion)
-    }
-
-    func notifyWhenInteractionEnds(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
-    func notifyWhenInteractionChanges(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
-    func viewController(forKey key: UITransitionContextViewControllerKey) -> UIViewController? { nil }
-    func view(forKey key: UITransitionContextViewKey) -> UIView? { nil }
-
-    func finish(cancelled: Bool) {
-        isInteractive = false
-        isCancelled = cancelled
-        let callbacks = completions
-        completions.removeAll()
-        callbacks.forEach { $0(self) }
-    }
 }
 
 @MainActor

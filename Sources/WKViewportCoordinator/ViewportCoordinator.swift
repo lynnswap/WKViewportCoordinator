@@ -182,12 +182,10 @@ final class ViewportMetricsResolver {
     ) -> ViewportMetrics {
         let windowSafeAreaInsets: UIEdgeInsets
         if let window = webView.window {
+            let windowRect = webView.convert(window.bounds, from: window)
             let safeRect = webView.convert(window.bounds.inset(by: window.safeAreaInsets), from: window)
-            windowSafeAreaInsets = UIEdgeInsets(
-                top: max(0, safeRect.minY - webView.bounds.minY),
-                left: max(0, safeRect.minX - webView.bounds.minX),
-                bottom: max(0, webView.bounds.maxY - safeRect.maxY),
-                right: max(0, webView.bounds.maxX - safeRect.maxX)
+            windowSafeAreaInsets = Self.windowSafeAreaInsets(
+                in: webView.bounds, windowBounds: windowRect, safeArea: safeRect
             )
         } else {
             windowSafeAreaInsets = .zero
@@ -211,6 +209,17 @@ final class ViewportMetricsResolver {
             obscuredInsets: geometry.obscuredInsets(includesNavigationBar: includesNavigationBar),
             keyboardOverlapHeight: keyboardOverlapHeight,
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight
+        )
+    }
+
+    // Only the window's unsafe bands obscure content. A host moving outside
+    // the window changes clipping, not the page's layout viewport.
+    static func windowSafeAreaInsets(in bounds: CGRect, windowBounds: CGRect, safeArea: CGRect) -> UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, min(bounds.maxY, safeArea.minY) - max(bounds.minY, windowBounds.minY)),
+            left: max(0, min(bounds.maxX, safeArea.minX) - max(bounds.minX, windowBounds.minX)),
+            bottom: max(0, min(bounds.maxY, windowBounds.maxY) - max(bounds.minY, safeArea.maxY)),
+            right: max(0, min(bounds.maxX, windowBounds.maxX) - max(bounds.minX, safeArea.maxX))
         )
     }
 
@@ -279,7 +288,6 @@ public final class ViewportCoordinator: NSObject {
     private var observationView: ViewportObservationView?
     private var lastKnownWindowScreen: UIScreen?
     private weak var observedHostViewController: UIViewController?
-    private weak var deferredTransitionCoordinator: (any UIViewControllerTransitionCoordinator)?
     private var webViewStateCancellables: Set<AnyCancellable> = []
 #if DEBUG
     @objc dynamic private(set) var appliedViewportUpdateCountForTesting = 0
@@ -341,8 +349,6 @@ public final class ViewportCoordinator: NSObject {
     ///
     /// Forward layout, hierarchy, and safe-area changes here when using a custom
     /// `WKWebView` subclass. ``ViewportWebView`` forwards these automatically.
-    /// During a view-controller transition, the previous viewport is retained
-    /// and recomputed after the transition completes or is cancelled.
     /// Calling this after ``invalidate()`` has no effect.
     public func update() {
         let currentScreen = webView?.window?.screen
@@ -379,10 +385,6 @@ public final class ViewportCoordinator: NSObject {
                 resolvedHostViewController: resolvedHostViewController,
                 webView: webView
             )
-            return
-        }
-
-        guard !deferViewportUpdateDuringTransition(in: hostViewController) else {
             return
         }
 
@@ -456,28 +458,6 @@ public final class ViewportCoordinator: NSObject {
 #endif
     }
 
-    private func deferViewportUpdateDuringTransition(in hostViewController: UIViewController) -> Bool {
-        guard let transitionCoordinator = hostViewController.transitionCoordinator else {
-            return false
-        }
-        if deferredTransitionCoordinator !== transitionCoordinator {
-            deferredTransitionCoordinator = transitionCoordinator
-            // A transition can move the host outside the window without changing
-            // the page's layout. Do not turn that displacement into content insets.
-            transitionCoordinator.animate(alongsideTransition: nil) { [weak self, weak transitionCoordinator] _ in
-                // UIKit may still expose this coordinator while running completions.
-                DispatchQueue.main.async { [weak self, weak transitionCoordinator] in
-                    guard let self else { return }
-                    if deferredTransitionCoordinator === transitionCoordinator {
-                        deferredTransitionCoordinator = nil
-                    }
-                    updateViewport(force: true)
-                }
-            }
-        }
-        return true
-    }
-
     /// Permanently stops coordination and releases its inset contribution and
     /// WebKit overrides. The scroll view's adjustment behavior is preserved.
     ///
@@ -491,7 +471,6 @@ public final class ViewportCoordinator: NSObject {
         isInvalidated = true
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
-        deferredTransitionCoordinator = nil
         clearObservationViewIfNeeded()
         if let webView {
             resetAppliedViewportInsets(on: webView)
