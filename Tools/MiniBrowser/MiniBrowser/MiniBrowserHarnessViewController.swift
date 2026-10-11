@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import ObjectiveC
 import Observation
+import SafariServices
 import SwiftUI
 import UIKit
 import WebKit
@@ -902,6 +903,10 @@ final class MiniBrowserHarnessViewController: UIViewController {
             children: [
                 UIAction(title: "Reload") { [weak self] _ in
                     self?.reloadFixture()
+                },
+                UIAction(title: "Open Safari") { [weak self] _ in
+                    let safari = SFSafariViewController(url: URL(string: "https://example.com")!)
+                    self?.present(safari, animated: true)
                 },
                 UIAction(title: state.isAttached ? "Detach WebView" : "Attach WebView") { [weak self] _ in
                     guard let self else {
