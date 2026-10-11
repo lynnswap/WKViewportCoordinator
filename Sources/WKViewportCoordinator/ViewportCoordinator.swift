@@ -182,12 +182,10 @@ final class ViewportMetricsResolver {
     ) -> ViewportMetrics {
         let windowSafeAreaInsets: UIEdgeInsets
         if let window = webView.window {
+            let windowRect = webView.convert(window.bounds, from: window)
             let safeRect = webView.convert(window.bounds.inset(by: window.safeAreaInsets), from: window)
-            windowSafeAreaInsets = UIEdgeInsets(
-                top: max(0, safeRect.minY - webView.bounds.minY),
-                left: max(0, safeRect.minX - webView.bounds.minX),
-                bottom: max(0, webView.bounds.maxY - safeRect.maxY),
-                right: max(0, webView.bounds.maxX - safeRect.maxX)
+            windowSafeAreaInsets = Self.windowSafeAreaInsets(
+                in: webView.bounds, windowBounds: windowRect, safeArea: safeRect
             )
         } else {
             windowSafeAreaInsets = .zero
@@ -211,6 +209,17 @@ final class ViewportMetricsResolver {
             obscuredInsets: geometry.obscuredInsets(includesNavigationBar: includesNavigationBar),
             keyboardOverlapHeight: keyboardOverlapHeight,
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight
+        )
+    }
+
+    // Only the window's unsafe bands obscure content. A host moving outside
+    // the window changes clipping, not the page's layout viewport.
+    static func windowSafeAreaInsets(in bounds: CGRect, windowBounds: CGRect, safeArea: CGRect) -> UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, min(bounds.maxY, safeArea.minY) - max(bounds.minY, windowBounds.minY)),
+            left: max(0, min(bounds.maxX, safeArea.minX) - max(bounds.minX, windowBounds.minX)),
+            bottom: max(0, min(bounds.maxY, windowBounds.maxY) - max(bounds.minY, safeArea.maxY)),
+            right: max(0, min(bounds.maxX, windowBounds.maxX) - max(bounds.minX, safeArea.maxX))
         )
     }
 

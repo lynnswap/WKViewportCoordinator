@@ -83,6 +83,60 @@ struct ViewportCoordinatorTests {
         #expect(metrics.obscuredInsets == .zero)
     }
 
+    @Test(arguments: [UIScrollView.ContentInsetAdjustmentBehavior.never, .always])
+    func movingHostOutsideWindowDoesNotAddHorizontalInsets(
+        adjustment: UIScrollView.ContentInsetAdjustmentBehavior
+    ) throws {
+        let controller = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: controller.view)
+        webView.scrollView.contentInsetAdjustmentBehavior = adjustment
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = ViewportCoordinator(webView: webView, hostViewController: controller)
+        defer { coordinator.invalidate() }
+        let baseline = try #require(coordinator.resolvedMetricsForTesting).obscuredInsets
+        let baselineContentInset = webView.scrollView.contentInset
+
+        // Model dismissal, cancellation, and a second dismissal in both directions.
+        for offset: CGFloat in [-100, -50, 0, -100, 0, 100, 50, 0] {
+            controller.view.transform = CGAffineTransform(translationX: offset, y: 0)
+            coordinator.update()
+            #expect(coordinator.resolvedMetricsForTesting?.obscuredInsets == baseline)
+            #expect(webView.scrollView.contentInset == baselineContentInset)
+        }
+    }
+
+    @Test
+    func windowSafeAreaProjectionExcludesOffWindowClipping() {
+        let window = CGRect(x: 0, y: 0, width: 400, height: 600)
+        let insets = UIEdgeInsets(top: 40, left: 20, bottom: 30, right: 10)
+        let safeArea = window.inset(by: insets)
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 600)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(in: bounds, windowBounds: window, safeArea: safeArea) == insets)
+
+        let shiftedWindow = window.offsetBy(dx: 100, dy: 100)
+        let shiftedSafeArea = safeArea.offsetBy(dx: 100, dy: 100)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: shiftedWindow, safeArea: shiftedSafeArea
+        ) == UIEdgeInsets(top: 40, left: 20, bottom: 0, right: 0))
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: window.offsetBy(dx: -100, dy: -100),
+            safeArea: safeArea.offsetBy(dx: -100, dy: -100)
+        ) == UIEdgeInsets(top: 0, left: 0, bottom: 30, right: 10))
+
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: CGRect(x: 5, y: 10, width: 300, height: 400), windowBounds: window, safeArea: safeArea
+        ) == UIEdgeInsets(top: 30, left: 15, bottom: 0, right: 0))
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: CGRect(x: 100, y: 100, width: 200, height: 300), windowBounds: window, safeArea: safeArea
+        ) == .zero)
+        #expect(ViewportMetricsResolver.windowSafeAreaInsets(
+            in: bounds, windowBounds: window.offsetBy(dx: 100, dy: 100),
+            safeArea: window.offsetBy(dx: 100, dy: 100)
+        ) == .zero)
+    }
+
     @Test
     @available(iOS 26.0, *)
     func refreshInsetSurvivesViewportUpdatesAndInvalidation() throws {
