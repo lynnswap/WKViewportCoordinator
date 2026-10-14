@@ -107,7 +107,7 @@ private final class ViewportSPIMethod<Result, each Argument> {
             method = cached
         } else {
             do {
-                method = try ABIRuntime.shared.object(object).method(selector: selector, as: signature).method
+                method = try ABIRuntime.shared.object(object).resolveMethodAndWait(selector: selector, as: signature).method
             } catch ABIResolutionError.declarationNotFound {
                 return nil
             }
