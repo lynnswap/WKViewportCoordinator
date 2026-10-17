@@ -9,6 +9,101 @@ import XCTest
 @Suite(.serialized)
 @MainActor
 struct ViewportCoordinatorTests {
+    @Test
+    func hiddenKeyboardGuideDoesNotIncludeContainerSafeArea() throws {
+        let host = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: host.view)
+        let tabs = UITabBarController()
+        tabs.setViewControllers([host, UIViewController()], animated: false)
+        let window = makeWindow(rootViewController: tabs)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = ViewportCoordinator(webView: webView, hostViewController: host)
+        defer { coordinator.invalidate() }
+        window.layoutIfNeeded()
+        try #require(webView.safeAreaInsets.bottom > 0)
+        let observationView = try #require(coordinator.observationViewForTesting)
+        #expect(observationView.keyboardLayoutGuide.layoutFrame.height == 0)
+    }
+
+    @Test
+    @available(iOS 26.0, *)
+    func excludedBottomEdgePreservesScrollRoomWithNativeBars() throws {
+        let host = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        attach(webView, to: host.view)
+        let navigation = UINavigationController(rootViewController: host)
+        let tabs = UITabBarController()
+        tabs.setViewControllers([navigation, UIViewController()], animated: false)
+        let window = makeWindow(rootViewController: tabs)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = ViewportCoordinator(webView: webView, hostViewController: host)
+        defer { coordinator.invalidate() }
+        coordinator.obscuredContentInsetEdges = [.top, .left, .right]
+        for compact in [false, true] {
+            if compact {
+                window.frame = CGRect(x: 0, y: 0, width: window.frame.height, height: window.frame.width)
+                tabs.traitOverrides.verticalSizeClass = .compact
+            }
+            for accessory in [false, true, false] {
+                let content = UILabel()
+                content.text = "Accessory"
+                tabs.setBottomAccessory(accessory ? UITabAccessory(contentView: content) : nil, animated: false)
+                window.setNeedsLayout()
+                window.layoutIfNeeded()
+                coordinator.update()
+                let metrics = try #require(coordinator.resolvedMetricsForTesting)
+                #expect(metrics.obscuredInsets.bottom == 0)
+                #expect(webView.scrollView.contentInset.bottom == webView.safeAreaInsets.bottom)
+                #expect(webView.bounds.size == host.view.bounds.size)
+            }
+        }
+    }
+
+    @Test(arguments: [UIScrollView.ContentInsetAdjustmentBehavior.never, .always])
+    @available(iOS 26.0, *)
+    func excludedBottomEdgePreservesDOMHitTesting(adjustment: UIScrollView.ContentInsetAdjustmentBehavior) async throws {
+        let host = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        webView.scrollView.contentInsetAdjustmentBehavior = adjustment
+        attach(webView, to: host.view)
+        let tabs = UITabBarController()
+        tabs.setViewControllers([host, UIViewController()], animated: false)
+        let window = makeWindow(rootViewController: tabs)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = ViewportCoordinator(webView: webView, hostViewController: host)
+        defer { coordinator.invalidate() }
+        coordinator.obscuredContentInsetEdges = [.top, .left, .right]
+        webView.loadHTMLString("""
+            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+            <body id="content" style="margin:0;height:3000px"></body>
+            """, baseURL: nil)
+
+        func pageHeight(reaching expected: Double) async throws -> Double {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            var height = 0.0
+            repeat {
+                if let value = try await webView.evaluateJavaScript("document.body?.id === 'content' ? innerHeight : null") as? Double {
+                    height = value
+                    if abs(height - expected) <= 1 { return height }
+                }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            return height
+        }
+
+        let expectedHeight = webView.bounds.height - window.safeAreaInsets.top
+        #expect(abs(try await pageHeight(reaching: expectedHeight) - expectedHeight) <= 1)
+        let hit = try await webView.evaluateJavaScript("document.elementFromPoint(8, \(expectedHeight - 8))?.id") as? String
+        #expect(hit == "content")
+
+        tabs.setTabBarHidden(true, animated: false)
+        window.layoutIfNeeded()
+        coordinator.update()
+        #expect(abs(try await pageHeight(reaching: expectedHeight) - expectedHeight) <= 1)
+    }
+
     @Test(arguments: [false, true])
     func verticalTabBarObscuresItsOwnEdge(isLeading: Bool) {
         let windowInsets = UIEdgeInsets(top: 0, left: isLeading ? 80 : 0, bottom: 30, right: isLeading ? 0 : 80)

@@ -14,8 +14,15 @@ struct ViewportMetrics: Equatable {
     var keyboardOverlapHeight: CGFloat
     var inputAccessoryOverlapHeight: CGFloat
     var additionalObscuredContentInsets: UIEdgeInsets = .zero
+    var additionalScrollContentInsets: UIEdgeInsets = .zero
 
     var finalObscuredInsets: UIEdgeInsets {
+        var insets = baseObscuredInsets
+        insets.bottom = max(insets.bottom, keyboardOverlapHeight, inputAccessoryOverlapHeight)
+        return insets
+    }
+
+    var finalScrollContentInsets: UIEdgeInsets {
         var insets = scrollFallbackObscuredInsets
         insets.bottom = max(insets.bottom, keyboardOverlapHeight, inputAccessoryOverlapHeight)
         return insets
@@ -23,6 +30,10 @@ struct ViewportMetrics: Equatable {
 
     // WebKit already includes keyboard avoidance in its legacy system inset.
     var scrollFallbackObscuredInsets: UIEdgeInsets {
+        baseObscuredInsets.wk_adding(additionalScrollContentInsets)
+    }
+
+    private var baseObscuredInsets: UIEdgeInsets {
         obscuredInsets.wk_clampedNonNegative.wk_adding(additionalObscuredContentInsets.wk_clampedNonNegative)
     }
 }
@@ -99,6 +110,7 @@ struct ResolvedViewportMetrics: Equatable {
     let unobscuredSafeAreaInsets: UIEdgeInsets
     let contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
     let contentScrollInsetFallback: UIEdgeInsets
+    let contentScrollInsets: UIEdgeInsets
 
     init(
         state: ViewportMetrics,
@@ -108,6 +120,7 @@ struct ResolvedViewportMetrics: Equatable {
         viewportSafeAreaInsets = state.safeArea.viewport.wk_roundedToPixel(screenScale)
         legacyFallbackSafeAreaInsets = state.safeArea.legacyFallbackBaseline.wk_roundedToPixel(screenScale)
         obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
+        contentScrollInsets = state.finalScrollContentInsets.wk_roundedToPixel(screenScale)
         let scrollFallbackObscuredInsets = state.scrollFallbackObscuredInsets.wk_roundedToPixel(screenScale)
         unobscuredSafeAreaInsets = UIEdgeInsets(
             top: max(0, viewportSafeAreaInsets.top - obscuredInsets.top),
@@ -178,7 +191,8 @@ final class ViewportMetricsResolver {
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat,
-        includesNavigationBar: Bool = true
+        includesNavigationBar: Bool = true,
+        obscuredContentInsetEdges: UIRectEdge = .all
     ) -> ViewportMetrics {
         let windowSafeAreaInsets: UIEdgeInsets
         if let window = webView.window {
@@ -201,14 +215,22 @@ final class ViewportMetricsResolver {
                 visibleFrame(of: $0, in: webView)
             }
         )
+        let scrollObscuredInsets = geometry.obscuredInsets(includesNavigationBar: includesNavigationBar)
+        let obscuredInsets = UIEdgeInsets(
+            top: obscuredContentInsetEdges.contains(.top) ? scrollObscuredInsets.top : 0,
+            left: obscuredContentInsetEdges.contains(.left) ? scrollObscuredInsets.left : 0,
+            bottom: obscuredContentInsetEdges.contains(.bottom) ? scrollObscuredInsets.bottom : 0,
+            right: obscuredContentInsetEdges.contains(.right) ? scrollObscuredInsets.right : 0
+        )
         return ViewportMetrics(
             safeArea: ViewportSafeAreaMetrics(
                 viewport: windowSafeAreaInsets,
                 legacyFallbackBaseline: webView.safeAreaInsets
             ),
-            obscuredInsets: geometry.obscuredInsets(includesNavigationBar: includesNavigationBar),
+            obscuredInsets: obscuredInsets,
             keyboardOverlapHeight: keyboardOverlapHeight,
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
+            additionalScrollContentInsets: scrollObscuredInsets.wk_subtractingClamped(obscuredInsets)
         )
     }
 
@@ -267,6 +289,21 @@ public final class ViewportCoordinator: NSObject {
         }
     }
 
+    /// Edges where automatically measured UIKit insets reduce the web layout viewport.
+    ///
+    /// The default is `.all`. Exclude an edge to let web content extend through
+    /// that edge's safe area and native bars while preserving their scroll insets.
+    /// This setting does not exclude ``additionalObscuredContentInsets`` or overlap
+    /// from the keyboard and input accessory.
+    @available(iOS 26.0, *)
+    public var obscuredContentInsetEdges: UIRectEdge {
+        get { storedObscuredContentInsetEdges }
+        set {
+            storedObscuredContentInsetEdges = newValue
+            update()
+        }
+    }
+
     /// Additional obscured content insets contributed by client-managed UI.
     ///
     /// Negative values are treated as zero.
@@ -283,6 +320,7 @@ public final class ViewportCoordinator: NSObject {
     private var isInvalidated = false
     private let metricsResolver = ViewportMetricsResolver()
     private var storedAdditionalObscuredContentInsets: UIEdgeInsets = .zero
+    private var storedObscuredContentInsetEdges: UIRectEdge = .all
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedViewportState: AppliedViewportState?
     private var observationView: ViewportObservationView?
@@ -401,7 +439,8 @@ public final class ViewportCoordinator: NSObject {
             webView: webView,
             keyboardOverlapHeight: keyboardOverlapHeight(in: webView),
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight(in: webView),
-            includesNavigationBar: includesNavigationBar
+            includesNavigationBar: includesNavigationBar,
+            obscuredContentInsetEdges: storedObscuredContentInsetEdges
         )
         effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
 
@@ -418,7 +457,7 @@ public final class ViewportCoordinator: NSObject {
         let legacyLayoutViewportSize: CGSize?
         if #available(iOS 26.0, *) {
             contentScrollInset = resolvedMetrics.contentInsetAdjustmentBehavior == .never
-                ? resolvedMetrics.obscuredInsets : nil
+                ? resolvedMetrics.contentScrollInsets : nil
             legacyLayoutViewportSize = nil
         } else {
             contentScrollInset = resolvedMetrics.contentScrollInsetFallback
@@ -536,6 +575,8 @@ public final class ViewportCoordinator: NSObject {
         observationView.backgroundColor = .clear
         if #available(iOS 15.0, *) {
             observationView.keyboardLayoutGuide.followsUndockedKeyboard = true
+            // A hidden keyboard must not reintroduce native chrome as keyboard overlap.
+            observationView.keyboardLayoutGuide.usesBottomSafeArea = false
         }
         hostView.addSubview(observationView)
         hostView.sendSubviewToBack(observationView)
@@ -793,6 +834,15 @@ extension UIEdgeInsets {
 }
 
 private extension UIEdgeInsets {
+    func wk_subtractingClamped(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, top - other.top),
+            left: max(0, left - other.left),
+            bottom: max(0, bottom - other.bottom),
+            right: max(0, right - other.right)
+        )
+    }
+
     func wk_adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
         UIEdgeInsets(
             top: top + other.top,
