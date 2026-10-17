@@ -86,34 +86,49 @@ struct ViewportCoordinatorTests {
             navigationDelegate.continuation = continuation
             webView.loadHTMLString("""
                 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-                <body id="content" style="margin:0;height:3000px"></body>
+                <body id="content" style="margin:0;height:3000px">
+                  <button id="action" style="position:fixed;left:40px;bottom:env(safe-area-inset-bottom);width:64px;height:32px">Action</button>
+                </body>
                 """, baseURL: nil)
         }
 
-        func pageHeight(reaching expected: Double) async throws -> Double {
+        func pageGeometry(
+            reaching expectedHeight: Double,
+            fixedButtonBottom expectedBottom: Double
+        ) async throws -> (height: Double, fixedButtonBottom: Double) {
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-            var height = 0.0
+            var geometry = (height: 0.0, fixedButtonBottom: 0.0)
             repeat {
-                if let value = try await webView.evaluateJavaScript("document.body?.id === 'content' ? innerHeight : null") as? Double {
-                    height = value
-                    if abs(height - expected) <= 1 { return height }
+                if let values = try await webView.evaluateJavaScript("""
+                    ({ height: innerHeight, fixedButtonBottom: document.getElementById('action').getBoundingClientRect().bottom })
+                    """) as? [String: Double],
+                   let height = values["height"],
+                   let bottom = values["fixedButtonBottom"] {
+                    geometry = (height, bottom)
+                    if abs(height - expectedHeight) <= 1, abs(bottom - expectedBottom) <= 1 { return geometry }
                 }
                 await Task.yield()
             } while ContinuousClock.now < deadline
-            return height
+            return geometry
         }
 
         let expectedHeight = webView.bounds.height - window.safeAreaInsets.top
-        let initialHeight = try await pageHeight(reaching: expectedHeight)
-        #expect(abs(initialHeight - expectedHeight) <= 1)
+        let expectedButtonBottom = expectedHeight - webView.safeAreaInsets.bottom
+        let initialGeometry = try await pageGeometry(reaching: expectedHeight, fixedButtonBottom: expectedButtonBottom)
+        #expect(abs(initialGeometry.height - expectedHeight) <= 1)
+        #expect(abs(initialGeometry.fixedButtonBottom - expectedButtonBottom) <= 1)
         let hit = try await webView.evaluateJavaScript("document.elementFromPoint(8, \(expectedHeight - 8))?.id") as? String
         #expect(hit == "content")
 
         tabs.setTabBarHidden(true, animated: false)
         window.layoutIfNeeded()
         coordinator.update()
-        let heightAfterHidingTabBar = try await pageHeight(reaching: expectedHeight)
-        #expect(abs(heightAfterHidingTabBar - expectedHeight) <= 1)
+        let expectedButtonBottomAfterHidingTabBar = expectedHeight - webView.safeAreaInsets.bottom
+        let geometryAfterHidingTabBar = try await pageGeometry(
+            reaching: expectedHeight, fixedButtonBottom: expectedButtonBottomAfterHidingTabBar
+        )
+        #expect(abs(geometryAfterHidingTabBar.height - expectedHeight) <= 1)
+        #expect(abs(geometryAfterHidingTabBar.fixedButtonBottom - expectedButtonBottomAfterHidingTabBar) <= 1)
     }
 
     @Test(arguments: [false, true])
