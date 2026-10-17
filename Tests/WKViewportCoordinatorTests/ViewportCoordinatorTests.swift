@@ -65,15 +65,15 @@ struct ViewportCoordinatorTests {
     @available(iOS 26.0, *)
     func excludedBottomEdgePreservesDOMHitTesting(adjustment: UIScrollView.ContentInsetAdjustmentBehavior) async throws {
         let host = UIViewController()
-        let webView = WKWebView(frame: .zero)
+        let webView = ViewportWebView(frame: .zero)
         webView.scrollView.contentInsetAdjustmentBehavior = adjustment
         attach(webView, to: host.view)
         let tabs = UITabBarController()
         tabs.setViewControllers([host, UIViewController()], animated: false)
         let window = makeWindow(rootViewController: tabs)
         defer { window.isHidden = true; window.rootViewController = nil }
-        let coordinator = ViewportCoordinator(webView: webView, hostViewController: host)
-        defer { coordinator.invalidate() }
+        let coordinator = webView.viewportCoordinator
+        coordinator.hostViewController = host
         coordinator.obscuredContentInsetEdges = [.top, .left, .right]
         webView.loadHTMLString("""
             <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
