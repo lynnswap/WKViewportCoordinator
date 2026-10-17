@@ -122,11 +122,15 @@ struct ResolvedViewportMetrics: Equatable {
         obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
         contentScrollInsets = state.finalScrollContentInsets.wk_roundedToPixel(screenScale)
         let scrollFallbackObscuredInsets = state.scrollFallbackObscuredInsets.wk_roundedToPixel(screenScale)
+        // Insets excluded from the layout viewport still protect fixed controls through CSS env().
+        let safeAreaInsets = viewportSafeAreaInsets.wk_maxPerEdge(
+            with: state.additionalScrollContentInsets.wk_roundedToPixel(screenScale)
+        )
         unobscuredSafeAreaInsets = UIEdgeInsets(
-            top: max(0, viewportSafeAreaInsets.top - obscuredInsets.top),
-            left: max(0, viewportSafeAreaInsets.left - obscuredInsets.left),
-            bottom: max(0, viewportSafeAreaInsets.bottom - obscuredInsets.bottom),
-            right: max(0, viewportSafeAreaInsets.right - obscuredInsets.right)
+            top: max(0, safeAreaInsets.top - obscuredInsets.top),
+            left: max(0, safeAreaInsets.left - obscuredInsets.left),
+            bottom: max(0, safeAreaInsets.bottom - obscuredInsets.bottom),
+            right: max(0, safeAreaInsets.right - obscuredInsets.right)
         )
         self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
         let safeAreaInsetContribution: UIEdgeInsets
@@ -293,6 +297,8 @@ public final class ViewportCoordinator: NSObject {
     ///
     /// The default is `.all`. Exclude an edge to let web content extend through
     /// that edge's safe area and native bars while preserving their scroll insets.
+    /// Insets at excluded edges are exposed through CSS `env(safe-area-inset-*)`
+    /// so fixed controls can avoid native UI while the page draws underneath it.
     /// This setting does not exclude ``additionalObscuredContentInsets`` or overlap
     /// from the keyboard and input accessory.
     @available(iOS 26.0, *)
