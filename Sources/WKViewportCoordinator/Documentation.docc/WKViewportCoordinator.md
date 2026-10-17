@@ -4,7 +4,9 @@ Coordinate a web view's layout viewport with its UIKit host.
 
 ## Overview
 
-Use ``ViewportWebView`` to keep web content inside the window and container safe areas. The coordinator measures geometry in the web view's coordinate space, including native bars at the top, bottom, or sides and keyboard and input accessory overlap.
+Use ``ViewportWebView`` to coordinate web content with the window and container safe areas, native bars, and keyboard and input accessory overlap.
+
+On iOS 26+, ``ViewportCoordinator/obscuredContentInsetEdges`` selects which edges of automatically measured UIKit insets reduce the layout viewport. For example, use `[.top, .left, .right]` to extend web content to the bottom edge while retaining its scroll space. Keyboard and input accessory overlap and ``ViewportCoordinator/additionalObscuredContentInsets`` still apply. The default is `.all`.
 
 ``ViewportWebView`` owns a ``ViewportCoordinator`` and forwards layout, hierarchy, and safe-area changes. Configure viewport behavior through ``ViewportWebView/viewportCoordinator``; configure scroll behavior and appearance through the inherited `scrollView` property.
 

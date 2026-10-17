@@ -1,6 +1,6 @@
 # WKViewportCoordinator
 
-Keep a `WKWebView`'s layout viewport inside UIKit safe areas and native navigation, tab, and toolbar geometry. The coordinator also accounts for keyboard and input accessory overlap.
+Coordinate a `WKWebView`'s layout viewport with UIKit safe areas, native bars, and keyboard and input accessory overlap.
 
 Requires iOS 18.4+ and Swift 6.3+.
 
@@ -39,7 +39,9 @@ final class BrowserViewController: UIViewController {
 
 Configure viewport behavior on `webView.viewportCoordinator`. Use `additionalObscuredContentInsets` for native UI whose space is not represented by the host's safe area. Set `includesNavigationBar` to `false` when the page already reserves the navigation bar's height. This excludes only the bar and preserves the system area above it. Also set `webView.scrollView.contentInsetAdjustmentBehavior = .never` in that case so UIKit does not add the bar's inset independently.
 
-Configure scroll adjustment and edge effects directly on `webView.scrollView`. With automatic inset adjustment disabled, the coordinator adds its own inset contribution while preserving existing insets, including adjustments made by `UIRefreshControl`. The page's layout viewport excludes the window's safe area on all four edges; the page does not need to add that excluded space again through CSS `env(safe-area-inset-*)`.
+On iOS 26+, set `obscuredContentInsetEdges` to `[.top, .left, .right]` to let web content extend to the bottom edge. Automatically measured safe-area and native-bar insets still reserve scroll space, but only the selected edges reduce the layout viewport. Keyboard and input accessory overlap and `additionalObscuredContentInsets` are unaffected by this setting. The default is `.all`.
+
+Configure scroll adjustment and edge effects directly on `webView.scrollView`. With automatic inset adjustment disabled, the coordinator adds its own inset contribution while preserving existing insets, including adjustments made by `UIRefreshControl`. By default, the page's layout viewport excludes the window's safe area on all four edges; the page does not need to add that excluded space again through CSS `env(safe-area-inset-*)`.
 
 ## Existing web view subclasses
 
