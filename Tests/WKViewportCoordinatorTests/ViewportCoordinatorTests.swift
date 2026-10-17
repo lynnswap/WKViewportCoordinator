@@ -75,10 +75,20 @@ struct ViewportCoordinatorTests {
         let coordinator = webView.viewportCoordinator
         coordinator.hostViewController = host
         coordinator.obscuredContentInsetEdges = [.top, .left, .right]
-        webView.loadHTMLString("""
-            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-            <body id="content" style="margin:0;height:3000px"></body>
-            """, baseURL: nil)
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
+            }
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <body id="content" style="margin:0;height:3000px"></body>
+                """, baseURL: nil)
+        }
 
         func pageHeight(reaching expected: Double) async throws -> Double {
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
@@ -94,14 +104,16 @@ struct ViewportCoordinatorTests {
         }
 
         let expectedHeight = webView.bounds.height - window.safeAreaInsets.top
-        #expect(abs(try await pageHeight(reaching: expectedHeight) - expectedHeight) <= 1)
+        let initialHeight = try await pageHeight(reaching: expectedHeight)
+        #expect(abs(initialHeight - expectedHeight) <= 1)
         let hit = try await webView.evaluateJavaScript("document.elementFromPoint(8, \(expectedHeight - 8))?.id") as? String
         #expect(hit == "content")
 
         tabs.setTabBarHidden(true, animated: false)
         window.layoutIfNeeded()
         coordinator.update()
-        #expect(abs(try await pageHeight(reaching: expectedHeight) - expectedHeight) <= 1)
+        let heightAfterHidingTabBar = try await pageHeight(reaching: expectedHeight)
+        #expect(abs(heightAfterHidingTabBar - expectedHeight) <= 1)
     }
 
     @Test(arguments: [false, true])
@@ -2003,6 +2015,29 @@ private final class TestInputBoundsSPIObject: NSObject {
 
     @objc(_inputViewBoundsInWindow)
     func inputViewBoundsInWindow() -> CGRect { boundsInWindow }
+}
+
+@MainActor
+private final class TestNavigationCompletionDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, any Error>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        finish(.success(()))
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        finish(.failure(error))
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        finish(.failure(error))
+    }
+
+    private func finish(_ result: Result<Void, any Error>) {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume(with: result)
+    }
 }
 
 @MainActor
