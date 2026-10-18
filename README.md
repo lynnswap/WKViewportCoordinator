@@ -1,17 +1,19 @@
 # WKViewportCoordinator
 
-Coordinate a `WKWebView`'s layout viewport with UIKit safe areas, native bars, and keyboard and input accessory overlap.
+Adjust a `WKWebView`'s page layout for UIKit safe areas, native bars, and the keyboard. The web view keeps its full frame.
 
-Requires iOS 18.4+ and Swift 6.3+.
+## Requirements
 
-> [!WARNING]
-> This package uses undocumented WebKit APIs. Validate viewport behavior on the OS versions you support before shipping. Unavailable SPI can leave viewport updates or restoration incomplete.
+- iOS 18.4+
+- Swift 6.3+
 
-## Installation
+In Xcode, add `https://github.com/lynnswap/WKViewportCoordinator` as a package dependency and select the `WKViewportCoordinator` product.
 
-Add [WKViewportCoordinator](https://github.com/lynnswap/WKViewportCoordinator) as a Swift package dependency and link the `WKViewportCoordinator` product.
+## Quick start
 
-## Usage
+### Update the viewport automatically
+
+Use `ViewportWebView` in place of `WKWebView`:
 
 ```swift
 import UIKit
@@ -21,57 +23,38 @@ import WKViewportCoordinator
 final class BrowserViewController: UIViewController {
     let webView = ViewportWebView(frame: .zero, configuration: WKWebViewConfiguration())
 
+    override func loadView() {
+        view = webView
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
+        webView.load(URLRequest(url: URL(string: "https://example.com")!))
     }
 }
 ```
 
-`ViewportWebView` owns its coordinator and forwards layout, hierarchy, and safe-area changes. It is open for subclassing. The coordinator finds the hosting view controller through the responder chain; set `webView.viewportCoordinator.hostViewController` when a container needs an explicit host.
+The web view finds its hosting controller and updates the page as UIKit's layout changes. The default settings handle safe-area spacing; you don't need to add it again in CSS.
 
-Configure viewport behavior on `webView.viewportCoordinator`. Use `additionalObscuredContentInsets` for native UI whose space is not represented by the host's safe area. Set `includesNavigationBar` to `false` when the page already reserves the navigation bar's height. This excludes only the bar and preserves the system area above it. Also set `webView.scrollView.contentInsetAdjustmentBehavior = .never` in that case so UIKit does not add the bar's inset independently.
+### Use your existing WKWebView subclass
 
-On iOS 26+, set `obscuredContentInsetEdges` to `[.top, .left, .right]` to let web content extend to the bottom edge. Automatically measured safe-area and native-bar insets still reserve scroll space, but only the selected edges reduce the layout viewport. Insets at excluded edges are exposed through CSS `env(safe-area-inset-*)` so fixed controls can avoid native UI while the page draws underneath it. Keyboard and input accessory overlap and `additionalObscuredContentInsets` are unaffected by this setting. The default is `.all`.
-
-Configure scroll adjustment and edge effects directly on `webView.scrollView`. With automatic inset adjustment disabled, the coordinator adds its own inset contribution while preserving existing insets, including adjustments made by `UIRefreshControl`. By default, the page's layout viewport excludes the window's safe area on all four edges; the page does not need to add that excluded space again through CSS `env(safe-area-inset-*)`.
-
-## Existing web view subclasses
-
-Retain one coordinator for each web view:
+Create and retain a coordinator for your `WKWebView` subclass:
 
 ```swift
 let coordinator = ViewportCoordinator(
-    webView: existingWebView,
+    webView: webView,
     hostViewController: hostViewController
 )
 ```
 
-Call `coordinator.update()` after layout, hierarchy, or safe-area changes. In a custom subclass, forward `layoutSubviews()`, `didMoveToSuperview()`, `didMoveToWindow()`, and `safeAreaInsetsDidChange()` after calling `super`.
+Call `update()` from the web view's layout, hierarchy, and safe-area callbacks. Call `invalidate()` when you want to stop coordination. See [Adding a web view](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/addingawebview) for the callbacks and lifetime rules.
 
-Call `invalidate()` when coordination ends. It removes the coordinator's inset contribution, releases its WebKit overrides, and stops observation. Further updates have no effect. Create a new coordinator if the same web view needs coordination again.
+## Documentation
 
-## Migration from v0.9.x
+The [DocC guides and API reference](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/) cover:
 
-This API revision is source-breaking.
+- [Adding a web view](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/addingawebview)
+- [Configuring the layout](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/configuringthelayout), including custom overlays and drawing behind native bars
+- [Migrating from v0.9.x](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/migratingfrom09)
 
-| Previous API | Replacement |
-| --- | --- |
-| `ManagedViewportWebView` | `ViewportWebView` |
-| Properties prefixed with `viewport` on the web view | Properties on `webView.viewportCoordinator` |
-| `includesNavigationBarInObscuredInsets` | `includesNavigationBar` |
-| `init(hostViewController:webView:)` | `init(webView:hostViewController:)` |
-| `hostViewDidAppear()`, `webViewHierarchyDidChange()`, `webViewSafeAreaInsetsDidChange()`, `updateViewport()` | `update()` |
-| Mutable `webView` on the coordinator | Create a coordinator for the new web view |
-| `scrollEdgeEffects` and its configuration types | UIKit's `scrollView.topEdgeEffect` and `bottomEdgeEffect` on iOS 26+ |
-| `obscuredContentInsetEdgesAffectedBySafeArea` | Removed; the coordinator supplies explicit viewport insets |
-| `bottomBarObscurationBehavior` | Removed; visible bar geometry and keyboard overlap determine the affected edges |
-
-Horizontal window safe areas now reduce the page's layout width, including with `viewport-fit=cover`. Insets from other owners are preserved when coordination changes or ends. An invalidated coordinator cannot be restarted.
+The package uses undocumented WebKit APIs internally. See the compatibility notes in [Adding a web view](https://lynnswap.github.io/WKViewportCoordinator/documentation/wkviewportcoordinator/addingawebview).

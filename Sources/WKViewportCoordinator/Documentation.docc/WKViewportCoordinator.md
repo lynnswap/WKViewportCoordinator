@@ -1,27 +1,27 @@
 # ``WKViewportCoordinator``
 
-Coordinate a web view's layout viewport with its UIKit host.
+Adjust web content to the space available in its UIKit container.
 
 ## Overview
 
-Use ``ViewportWebView`` to coordinate web content with the window and container safe areas, native bars, and keyboard and input accessory overlap.
+Use ``ViewportWebView`` for automatic layout updates, or attach a ``ViewportCoordinator`` to an existing web view. Both account for safe areas, native bars, the keyboard, and input accessories without resizing the web view.
 
-On iOS 26+, ``ViewportCoordinator/obscuredContentInsetEdges`` selects which edges of automatically measured UIKit insets reduce the layout viewport. For example, use `[.top, .left, .right]` to extend web content to the bottom edge while retaining its scroll space. Keyboard and input accessory overlap and ``ViewportCoordinator/additionalObscuredContentInsets`` still apply. The default is `.all`.
+Requires iOS 18.4+ and Swift 6.3+.
 
-``ViewportWebView`` owns a ``ViewportCoordinator`` and forwards layout, hierarchy, and safe-area changes. Configure viewport behavior through ``ViewportWebView/viewportCoordinator``; configure scroll behavior and appearance through the inherited `scrollView` property.
-
-Use ``ViewportCoordinator`` directly for an existing web view subclass. Retain it and call ``ViewportCoordinator/update()`` from the web view's layout, hierarchy, and safe-area callbacks. Set ``ViewportCoordinator/hostViewController`` when the responder chain does not identify the intended host.
-
-The coordinator adds its scroll inset contribution without replacing insets owned by the application or UIKit. Calling ``ViewportCoordinator/invalidate()`` removes that contribution, releases WebKit overrides, and permanently stops observation. The scroll view's automatic adjustment setting is preserved.
-
-> Warning: This package uses undocumented WebKit APIs. Unavailable SPI can leave viewport updates or restoration incomplete. Validate behavior on each supported OS version.
+Start with <doc:AddingAWebView> to set up a web view. Use <doc:ConfiguringTheLayout> when the page needs to reserve space itself or draw behind native UI.
 
 ## Topics
 
-### Automatic coordination
+### Getting started
+
+- <doc:AddingAWebView>
+- <doc:ConfiguringTheLayout>
+
+### Web views
 
 - ``ViewportWebView``
-
-### Existing web views
-
 - ``ViewportCoordinator``
+
+### Migration
+
+- <doc:MigratingFrom09>

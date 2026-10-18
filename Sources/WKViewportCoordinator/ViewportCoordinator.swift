@@ -261,18 +261,17 @@ final class ViewportMetricsResolver {
     }
 }
 
-/// Coordinates a `WKWebView` viewport with UIKit safe areas, visible chrome, keyboard, and input accessory geometry.
+/// Adjusts a web page's layout for safe areas, native bars, and the keyboard.
 ///
-/// With `contentInsetAdjustmentBehavior` set to `.never`, the coordinator supplies
-/// a contribution to the scroll view's content insets. UIKit's refresh-control
-/// adjustments and client-supplied insets are preserved when that contribution
-/// changes or is removed. Use ``additionalObscuredContentInsets`` for native UI
-/// that also needs to reduce the web layout viewport.
+/// Use ``ViewportWebView`` for automatic updates. For another `WKWebView`
+/// subclass, retain a coordinator and call ``update()`` after layout, hierarchy,
+/// and safe-area changes.
 @MainActor
 public final class ViewportCoordinator: NSObject {
     /// The view controller that hosts the web view.
     ///
-    /// If this value is `nil`, the coordinator resolves a host from the web view's responder chain or window root.
+    /// When `nil`, the coordinator finds the host through the web view's responder
+    /// chain or the window's root view controller.
     public weak var hostViewController: UIViewController? {
         didSet {
             updateViewport(force: true)
@@ -281,27 +280,26 @@ public final class ViewportCoordinator: NSObject {
 
     private weak var webView: WKWebView?
 
-    /// Whether a visible navigation bar contributes to the obscured content insets.
+    /// Whether the page's layout leaves room for a visible navigation bar.
     ///
-    /// The default is `true`. Set this to `false` when the web content already reserves
-    /// space for the navigation bar. Window safe-area, bottom-bar, keyboard, input-accessory,
-    /// and additional obscured insets are preserved. Set the scroll view's
-    /// `contentInsetAdjustmentBehavior` to `.never` to also exclude UIKit's automatic
-    /// navigation-bar adjustment. The coordinator does not change that property.
+    /// Defaults to `true`. Set this to `false` when the page already reserves that
+    /// space, and set the scroll view's `contentInsetAdjustmentBehavior` to `.never`
+    /// so UIKit does not add the bar's inset independently. The safe area above the
+    /// bar and all other obscured insets still apply.
     public var includesNavigationBar = true {
         didSet {
             update()
         }
     }
 
-    /// Edges where automatically measured UIKit insets reduce the web layout viewport.
+    /// The edges where UIKit insets reduce the page's layout area.
     ///
-    /// The default is `.all`. Exclude an edge to let web content extend through
-    /// that edge's safe area and native bars while preserving their scroll insets.
-    /// Insets at excluded edges are exposed through CSS `env(safe-area-inset-*)`
-    /// so fixed controls can avoid native UI while the page draws underneath it.
-    /// This setting does not exclude ``additionalObscuredContentInsets`` or overlap
-    /// from the keyboard and input accessory.
+    /// Defaults to `.all`. Exclude an edge to draw beneath its safe area and native
+    /// bars. Content can still scroll clear of them; fixed controls must use CSS
+    /// `env(safe-area-inset-*)` to avoid them.
+    ///
+    /// Keyboard and input accessory avoidance, and ``additionalObscuredContentInsets``,
+    /// apply regardless of this setting.
     @available(iOS 26.0, *)
     public var obscuredContentInsetEdges: UIRectEdge {
         get { storedObscuredContentInsetEdges }
@@ -311,7 +309,7 @@ public final class ViewportCoordinator: NSObject {
         }
     }
 
-    /// Additional obscured content insets contributed by client-managed UI.
+    /// Extra space for overlays not included in the host's safe area.
     ///
     /// Negative values are treated as zero.
     public var additionalObscuredContentInsets: UIEdgeInsets {
@@ -397,11 +395,10 @@ public final class ViewportCoordinator: NSObject {
         tearDownViewportCoordination()
     }
 
-    /// Recomputes the viewport after a change to the web view's layout or host.
+    /// Updates the page's layout to match the current UIKit layout.
     ///
     /// Forward layout, hierarchy, and safe-area changes here when using a custom
     /// `WKWebView` subclass. ``ViewportWebView`` forwards these automatically.
-    /// Calling this after ``invalidate()`` has no effect.
     public func update() {
         let currentScreen = webView?.window?.screen
         if let currentScreen, let lastKnownWindowScreen, lastKnownWindowScreen !== currentScreen {
@@ -512,10 +509,10 @@ public final class ViewportCoordinator: NSObject {
 #endif
     }
 
-    /// Permanently stops coordination and releases its inset contribution and
-    /// WebKit overrides. The scroll view's adjustment behavior is preserved.
+    /// Stops automatic updates and removes this coordinator's adjustments.
     ///
-    /// Create a new coordinator to start coordinating this web view again.
+    /// The scroll view's `contentInsetAdjustmentBehavior` is unchanged.
+    /// Calling ``update()`` after this has no effect; create a new coordinator to start again.
     public func invalidate() {
         tearDownViewportCoordination()
     }

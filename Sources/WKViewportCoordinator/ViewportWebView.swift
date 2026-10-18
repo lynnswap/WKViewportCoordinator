@@ -2,13 +2,13 @@
 import UIKit
 import WebKit
 
-/// A web view that coordinates its layout viewport with its UIKit host.
+/// A web view that adjusts page layout for native UI.
 ///
-/// Configure viewport behavior through ``viewportCoordinator`` and scroll
-/// behavior and appearance through the inherited `scrollView` property.
+/// Use ``viewportCoordinator`` to configure the layout. Configure scrolling and
+/// scroll-edge effects through the inherited `scrollView` property.
 @MainActor
 open class ViewportWebView: WKWebView {
-    /// The coordinator owned by this web view.
+    /// The coordinator for this web view.
     public var viewportCoordinator: ViewportCoordinator { coordinator }
 
     private var coordinator: ViewportCoordinator!
