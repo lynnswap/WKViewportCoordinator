@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ABIBridge
 import Combine
 import UIKit
 import WebKit
@@ -329,6 +330,7 @@ public final class ViewportCoordinator: NSObject {
     private var storedObscuredContentInsetEdges: UIRectEdge = .all
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedViewportState: AppliedViewportState?
+    private var defaultViewportSizeCoordination: [NativeObjCMethodHook] = []
     private var observationView: ViewportObservationView?
     private var lastKnownWindowScreen: UIScreen?
     private weak var observedHostViewController: UIViewController?
@@ -380,6 +382,12 @@ public final class ViewportCoordinator: NSObject {
         self.hostViewController = hostViewController
         self.webView = webView
         super.init()
+        if #available(iOS 26.0, *) {
+            defaultViewportSizeCoordination = ViewportSPIBridge.coordinateDefaultViewportSize(in: webView) { [weak self] in
+                guard let self else { return false }
+                return !isInvalidated && lastAppliedViewportState != nil
+            }
+        }
         observeKeyboardNotifications()
         observeWebViewStateIfPossible()
         update()
@@ -491,6 +499,7 @@ public final class ViewportCoordinator: NSObject {
                 unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
                 to: webView
             )
+            ViewportSPIBridge.applyDefaultViewportSize(to: webView)
         } else {
             ViewportSPIBridge.applyLegacyViewportFallback(
                 resolvedMetrics,
@@ -514,6 +523,8 @@ public final class ViewportCoordinator: NSObject {
     private func tearDownViewportCoordination() {
         guard !isInvalidated else { return }
         isInvalidated = true
+        defaultViewportSizeCoordination.forEach { $0.invalidate() }
+        defaultViewportSizeCoordination.removeAll()
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
         clearObservationViewIfNeeded()
@@ -624,6 +635,7 @@ public final class ViewportCoordinator: NSObject {
             // Flag resets do not recalculate WebKit's layout viewport.
             webView.obscuredContentInsets = .zero
             ViewportSPIBridge.resetViewportOverrides(on: webView)
+            ViewportSPIBridge.restoreDefaultViewportSize(on: webView)
         } else {
             ViewportSPIBridge.resetLegacyViewportFallback(on: webView.scrollView, webView: webView)
         }

@@ -9,6 +9,131 @@ import XCTest
 @Suite(.serialized)
 @MainActor
 struct ViewportCoordinatorTests {
+    @Test(.timeLimit(.minutes(1)))
+    @available(iOS 26.0, *)
+    func coordinationPreservesConfiguredViewportUnitsAndTheirUpdates() async throws {
+        let controller = UIViewController()
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        controller.view.addSubview(webView)
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        webView.setMinimumViewportInset(
+            UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 240),
+            maximumViewportInset: UIEdgeInsets(top: 80, left: 0, bottom: 20, right: 280)
+        )
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
+            }
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <body><script>
+                for (const unit of ['vw', 'vh', 'lvw', 'lvh', 'svw', 'svh']) {
+                    const element = document.createElement('div');
+                    element.id = unit;
+                    element.style.cssText = `position:fixed;visibility:hidden;width:100${unit};height:1px`;
+                    document.body.append(element);
+                }
+                </script></body>
+                """, baseURL: nil)
+        }
+
+        func expectUnits(_ expected: [Double]) async throws {
+            var actual: [Double] = []
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            repeat {
+                actual = try await webView.evaluateJavaScript("""
+                    document.getElementById('svh') ?
+                        ['vw', 'vh', 'lvw', 'lvh', 'svw', 'svh'].map(
+                            unit => document.getElementById(unit).getBoundingClientRect().width
+                        ) : []
+                    """) as? [Double] ?? []
+                if actual.count == expected.count,
+                   zip(actual, expected).allSatisfy({ abs($0 - $1) <= 1 }) { return }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            #expect(actual.count == expected.count)
+            for (value, target) in zip(actual, expected) {
+                #expect(abs(value - target) <= 1, "expected: \(expected), actual: \(actual)")
+            }
+        }
+
+        try await expectUnits([390, 400, 150, 380, 110, 300])
+        let coordinator = ViewportCoordinator(webView: webView)
+        defer { coordinator.invalidate() }
+        coordinator.additionalObscuredContentInsets.right = 40
+        let width = webView.bounds.inset(by: webView.obscuredContentInsets).width
+        try await expectUnits([width, 400, 150, 380, 110, 300])
+        webView.setNeedsLayout()
+        webView.layoutIfNeeded()
+        try await expectUnits([width, 400, 150, 380, 110, 300])
+
+        webView.setMinimumViewportInset(
+            UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 250),
+            maximumViewportInset: UIEdgeInsets(top: 100, left: 0, bottom: 30, right: 300)
+        )
+        try await expectUnits([width, 400, 140, 370, 90, 270])
+        coordinator.invalidate()
+        try await expectUnits([390, 400, 140, 370, 90, 270])
+        webView.frame.size.width = 350
+        try await expectUnits([350, 400, 100, 370, 50, 270])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    @available(iOS 26.0, *)
+    func excludedHorizontalEdgesPreserveDefaultViewportWidth() async throws {
+        let controller = UIViewController()
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20)
+        let webView = ViewportWebView(frame: .zero)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
+        attach(webView, to: controller.view)
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = webView.viewportCoordinator
+        defer { coordinator.invalidate() }
+        coordinator.obscuredContentInsetEdges = [.top, .bottom]
+        window.layoutIfNeeded()
+        coordinator.update()
+        try #require(webView.scrollView.adjustedContentInset.left > 0)
+        try #require(webView.scrollView.adjustedContentInset.right > 0)
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
+            }
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <div id="width" style="width:100vw;height:1px"></div>
+                """, baseURL: nil)
+        }
+
+        for additionalRightInset: CGFloat in [0, 12] {
+            coordinator.additionalObscuredContentInsets.right = additionalRightInset
+            let expectedWidth = webView.bounds.width - additionalRightInset
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            var width: Double?
+            repeat {
+                width = try await webView.evaluateJavaScript(
+                    "document.getElementById('width')?.getBoundingClientRect().width"
+                ) as? Double
+                if let width, abs(width - expectedWidth) <= 1 { break }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            let actualWidth = try #require(width)
+            #expect(abs(actualWidth - expectedWidth) <= 1)
+        }
+    }
+
     @Test
     func hiddenKeyboardGuideDoesNotIncludeContainerSafeArea() throws {
         let host = UIViewController()
@@ -1351,33 +1476,31 @@ struct ViewportCoordinatorTests {
         defer { window.isHidden = true; window.rootViewController = nil }
         webView.loadHTMLString("""
             <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=\(viewportFit)">
-            <body id="ready"></body>
+            <body id="ready"><div id="viewport-width" style="width:100vw;height:1px"></div></body>
             """, baseURL: nil)
 
-        func pageWidth(reaching expected: Double) async throws -> Double {
+        func pageWidthsMatch(_ expected: Double) async throws -> Bool {
             let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-            var width = 0.0
             repeat {
-                if let value = try await webView.evaluateJavaScript(
-                    "document.getElementById('ready') ? innerWidth : null"
-                ) as? Double {
-                    width = value
-                    if abs(width - expected) <= 1 { return width }
+                if let widths = try await webView.evaluateJavaScript(
+                    "document.getElementById('viewport-width') ? [innerWidth, document.getElementById('viewport-width').getBoundingClientRect().width] : null"
+                ) as? [Double], widths.allSatisfy({ abs($0 - expected) <= 1 }) {
+                    return true
                 }
                 await Task.yield()
             } while ContinuousClock.now < deadline
-            return width
+            return false
         }
 
         let originalWidth = webView.bounds.width
-        #expect(abs(try await pageWidth(reaching: originalWidth) - originalWidth) <= 1)
+        #expect(try await pageWidthsMatch(originalWidth))
         let coordinator = ViewportCoordinator(webView: webView)
         coordinator.additionalObscuredContentInsets.right = 100
         let reducedWidth = webView.bounds.inset(by: webView.obscuredContentInsets).width
         #expect(reducedWidth < originalWidth)
-        #expect(abs(try await pageWidth(reaching: reducedWidth) - reducedWidth) <= 1)
+        #expect(try await pageWidthsMatch(reducedWidth))
         coordinator.invalidate()
-        #expect(abs(try await pageWidth(reaching: originalWidth) - originalWidth) <= 1)
+        #expect(try await pageWidthsMatch(originalWidth))
     }
 
     @Test
