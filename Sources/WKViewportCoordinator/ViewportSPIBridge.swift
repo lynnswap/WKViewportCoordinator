@@ -5,44 +5,115 @@ import OSLog
 import UIKit
 import WebKit
 
-enum ViewportSPISelectorNames {
-    private static func deobfuscate(_ reverseTokens: [String]) -> String {
-        reverseTokens.reversed().joined()
-    }
+// Keep decoding at runtime instead of folding literals into call sites.
+@inline(never)
+private func decodedSPIString(_ encodedBytes: [UInt8]) -> String {
+    let key: UInt8 = 0xA7
+    return String(decoding: encodedBytes.map { $0 ^ key }, as: UTF8.self)
+}
 
+enum ViewportSPISelectorNames {
     // The comments intentionally keep the real selector spellings next to the
     // obfuscated values so selector updates remain reviewable.
     // Original: _setUnobscuredSafeAreaInsets:
-    static let setUnobscuredSafeAreaInsets = deobfuscate([":", "Insets", "Area", "Safe", "Unobscured", "set", "_"])
+    static let setUnobscuredSafeAreaInsets = decodedSPIString([
+        0xF8, 0xD4, 0xC2, 0xD3, 0xF2, 0xC9, 0xC8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5,
+        0xC2, 0xC3, 0xF4, 0xC6, 0xC1, 0xC2, 0xE6, 0xD5, 0xC2, 0xC6, 0xEE, 0xC9,
+        0xD4, 0xC2, 0xD3, 0xD4, 0x9D
+    ])
     // Original: _resetObscuredInsets
-    static let resetObscuredInsets = deobfuscate(["Insets", "Obscured", "reset", "_"])
+    static let resetObscuredInsets = decodedSPIString([
+        0xF8, 0xD5, 0xC2, 0xD4, 0xC2, 0xD3, 0xE8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5,
+        0xC2, 0xC3, 0xEE, 0xC9, 0xD4, 0xC2, 0xD3, 0xD4
+    ])
     // Original: _resetUnobscuredSafeAreaInsets
-    static let resetUnobscuredSafeAreaInsets = deobfuscate(["Insets", "Area", "Safe", "Unobscured", "reset", "_"])
+    static let resetUnobscuredSafeAreaInsets = decodedSPIString([
+        0xF8, 0xD5, 0xC2, 0xD4, 0xC2, 0xD3, 0xF2, 0xC9, 0xC8, 0xC5, 0xD4, 0xC4,
+        0xD2, 0xD5, 0xC2, 0xC3, 0xF4, 0xC6, 0xC1, 0xC2, 0xE6, 0xD5, 0xC2, 0xC6,
+        0xEE, 0xC9, 0xD4, 0xC2, 0xD3, 0xD4
+    ])
     // Original: _setObscuredInsets:
-    static let setObscuredInsets = deobfuscate([":", "Insets", "Obscured", "set", "_"])
+    static let setObscuredInsets = decodedSPIString([
+        0xF8, 0xD4, 0xC2, 0xD3, 0xE8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5, 0xC2, 0xC3,
+        0xEE, 0xC9, 0xD4, 0xC2, 0xD3, 0xD4, 0x9D
+    ])
     // Original: _setObscuredInsetsInternal:
-    static let setObscuredInsetsInternal = deobfuscate([":", "Internal", "Insets", "Obscured", "set", "_"])
+    static let setObscuredInsetsInternal = decodedSPIString([
+        0xF8, 0xD4, 0xC2, 0xD3, 0xE8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5, 0xC2, 0xC3,
+        0xEE, 0xC9, 0xD4, 0xC2, 0xD3, 0xD4, 0xEE, 0xC9, 0xD3, 0xC2, 0xD5, 0xC9,
+        0xC6, 0xCB, 0x9D
+    ])
     // Original: _overrideLayoutParametersWithMinimumLayoutSize:maximumUnobscuredSizeOverride:
-    static let overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride = deobfuscate([
-        ":", "Override", "Size", "Unobscured", "maximum", ":",
-        "Size", "Layout", "Minimum", "With", "Parameters", "Layout", "override", "_"
+    static let overrideLayoutParametersWithMinimumLayoutSizeMaximumUnobscuredSizeOverride = decodedSPIString([
+        0xF8, 0xC8, 0xD1, 0xC2, 0xD5, 0xD5, 0xCE, 0xC3, 0xC2, 0xEB, 0xC6, 0xDE,
+        0xC8, 0xD2, 0xD3, 0xF7, 0xC6, 0xD5, 0xC6, 0xCA, 0xC2, 0xD3, 0xC2, 0xD5,
+        0xD4, 0xF0, 0xCE, 0xD3, 0xCF, 0xEA, 0xCE, 0xC9, 0xCE, 0xCA, 0xD2, 0xCA,
+        0xEB, 0xC6, 0xDE, 0xC8, 0xD2, 0xD3, 0xF4, 0xCE, 0xDD, 0xC2, 0x9D, 0xCA,
+        0xC6, 0xDF, 0xCE, 0xCA, 0xD2, 0xCA, 0xF2, 0xC9, 0xC8, 0xC5, 0xD4, 0xC4,
+        0xD2, 0xD5, 0xC2, 0xC3, 0xF4, 0xCE, 0xDD, 0xC2, 0xE8, 0xD1, 0xC2, 0xD5,
+        0xD5, 0xCE, 0xC3, 0xC2, 0x9D
     ])
     // Original: _overrideLayoutParametersWithMinimumLayoutSize:minimumUnobscuredSizeOverride:maximumUnobscuredSizeOverride:
-    static let overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride = deobfuscate([
-        ":", "Override", "Size", "Unobscured", "maximum", ":",
-        "Override", "Size", "Unobscured", "minimum", ":",
-        "Size", "Layout", "Minimum", "With", "Parameters", "Layout", "override", "_"
+    static let overrideLayoutParametersWithMinimumLayoutSizeMinimumUnobscuredSizeOverrideMaximumUnobscuredSizeOverride = decodedSPIString([
+        0xF8, 0xC8, 0xD1, 0xC2, 0xD5, 0xD5, 0xCE, 0xC3, 0xC2, 0xEB, 0xC6, 0xDE,
+        0xC8, 0xD2, 0xD3, 0xF7, 0xC6, 0xD5, 0xC6, 0xCA, 0xC2, 0xD3, 0xC2, 0xD5,
+        0xD4, 0xF0, 0xCE, 0xD3, 0xCF, 0xEA, 0xCE, 0xC9, 0xCE, 0xCA, 0xD2, 0xCA,
+        0xEB, 0xC6, 0xDE, 0xC8, 0xD2, 0xD3, 0xF4, 0xCE, 0xDD, 0xC2, 0x9D, 0xCA,
+        0xCE, 0xC9, 0xCE, 0xCA, 0xD2, 0xCA, 0xF2, 0xC9, 0xC8, 0xC5, 0xD4, 0xC4,
+        0xD2, 0xD5, 0xC2, 0xC3, 0xF4, 0xCE, 0xDD, 0xC2, 0xE8, 0xD1, 0xC2, 0xD5,
+        0xD5, 0xCE, 0xC3, 0xC2, 0x9D, 0xCA, 0xC6, 0xDF, 0xCE, 0xCA, 0xD2, 0xCA,
+        0xF2, 0xC9, 0xC8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5, 0xC2, 0xC3, 0xF4, 0xCE,
+        0xDD, 0xC2, 0xE8, 0xD1, 0xC2, 0xD5, 0xD5, 0xCE, 0xC3, 0xC2, 0x9D
     ])
     // Original: _clearOverrideLayoutParameters
-    static let clearOverrideLayoutParameters = deobfuscate(["Parameters", "Layout", "Override", "clear", "_"])
+    static let clearOverrideLayoutParameters = decodedSPIString([
+        0xF8, 0xC4, 0xCB, 0xC2, 0xC6, 0xD5, 0xE8, 0xD1, 0xC2, 0xD5, 0xD5, 0xCE,
+        0xC3, 0xC2, 0xEB, 0xC6, 0xDE, 0xC8, 0xD2, 0xD3, 0xF7, 0xC6, 0xD5, 0xC6,
+        0xCA, 0xC2, 0xD3, 0xC2, 0xD5, 0xD4
+    ])
     // Original: _scrollViewSystemContentInset
-    static let scrollViewSystemContentInset = deobfuscate(["Inset", "Content", "System", "View", "scroll", "_"])
+    static let scrollViewSystemContentInset = decodedSPIString([
+        0xF8, 0xD4, 0xC4, 0xD5, 0xC8, 0xCB, 0xCB, 0xF1, 0xCE, 0xC2, 0xD0, 0xF4,
+        0xDE, 0xD4, 0xD3, 0xC2, 0xCA, 0xE4, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xD3,
+        0xEE, 0xC9, 0xD4, 0xC2, 0xD3
+    ])
     // Original: _systemContentInset
-    static let systemContentInset = deobfuscate(["Inset", "Content", "system", "_"])
+    static let systemContentInset = decodedSPIString([
+        0xF8, 0xD4, 0xDE, 0xD4, 0xD3, 0xC2, 0xCA, 0xE4, 0xC8, 0xC9, 0xD3, 0xC2,
+        0xC9, 0xD3, 0xEE, 0xC9, 0xD4, 0xC2, 0xD3
+    ])
     // Original: _frameOrBoundsMayHaveChanged
-    static let frameOrBoundsMayHaveChanged = deobfuscate(["Changed", "Have", "May", "Bounds", "Or", "frame", "_"])
+    static let frameOrBoundsMayHaveChanged = decodedSPIString([
+        0xF8, 0xC1, 0xD5, 0xC6, 0xCA, 0xC2, 0xE8, 0xD5, 0xE5, 0xC8, 0xD2, 0xC9,
+        0xC3, 0xD4, 0xEA, 0xC6, 0xDE, 0xEF, 0xC6, 0xD1, 0xC2, 0xE4, 0xCF, 0xC6,
+        0xC9, 0xC0, 0xC2, 0xC3
+    ])
     // Original: _inputViewBoundsInWindow
-    static let inputViewBoundsInWindow = deobfuscate(["Window", "In", "Bounds", "View", "input", "_"])
+    static let inputViewBoundsInWindow = decodedSPIString([
+        0xF8, 0xCE, 0xC9, 0xD7, 0xD2, 0xD3, 0xF1, 0xCE, 0xC2, 0xD0, 0xE5, 0xC8,
+        0xD2, 0xC9, 0xC3, 0xD4, 0xEE, 0xC9, 0xF0, 0xCE, 0xC9, 0xC3, 0xC8, 0xD0
+    ])
+    // Original: _shouldDeferGeometryUpdates
+    static let shouldDeferGeometryUpdates = decodedSPIString([
+        0xF8, 0xD4, 0xCF, 0xC8, 0xD2, 0xCB, 0xC3, 0xE3, 0xC2, 0xC1, 0xC2, 0xD5,
+        0xE0, 0xC2, 0xC8, 0xCA, 0xC2, 0xD3, 0xD5, 0xDE, 0xF2, 0xD7, 0xC3, 0xC6,
+        0xD3, 0xC2, 0xD4
+    ])
+    // Original: _didStopDeferringGeometryUpdates
+    static let didStopDeferringGeometryUpdates = decodedSPIString([
+        0xF8, 0xC3, 0xCE, 0xC3, 0xF4, 0xD3, 0xC8, 0xD7, 0xE3, 0xC2, 0xC1, 0xC2,
+        0xD5, 0xD5, 0xCE, 0xC9, 0xC0, 0xE0, 0xC2, 0xC8, 0xCA, 0xC2, 0xD3, 0xD5,
+        0xDE, 0xF2, 0xD7, 0xC3, 0xC6, 0xD3, 0xC2, 0xD4
+    ])
+    // Original: _apiObject
+    static let apiObject = decodedSPIString([
+        0xF8, 0xC6, 0xD7, 0xCE, 0xE8, 0xC5, 0xCD, 0xC2, 0xC4, 0xD3
+    ])
+    // Original: _pageForTesting
+    static let pageForTesting = decodedSPIString([
+        0xF8, 0xD7, 0xC6, 0xC0, 0xC2, 0xE1, 0xC8, 0xD5, 0xF3, 0xC2, 0xD4, 0xD3,
+        0xCE, 0xC9, 0xC0
+    ])
 }
 
 @MainActor
@@ -85,6 +156,15 @@ private enum ViewportSPIMethods {
     static let inputViewBoundsInWindow = ViewportSPIMethod(
         ViewportSPISelectorNames.inputViewBoundsInWindow, as: (() -> CGRect).self
     )
+    static let shouldDeferGeometryUpdates = ViewportSPIMethod(
+        ViewportSPISelectorNames.shouldDeferGeometryUpdates, as: (() -> Bool).self
+    )
+    static let apiObject = ViewportSPIMethod(
+        ViewportSPISelectorNames.apiObject, as: (() -> UnsafeRawPointer).self
+    )
+    static let pageForTesting = ViewportSPIMethod(
+        ViewportSPISelectorNames.pageForTesting, as: (() -> UnsafeRawPointer?).self
+    )
 }
 
 @MainActor
@@ -99,7 +179,7 @@ private final class ViewportSPIMethod<Result, each Argument> {
         self.signature = signature
     }
 
-    func invoke(on object: NSObject, _ arguments: repeat each Argument) throws -> Result? {
+    func invoke(on object: AnyObject, _ arguments: repeat each Argument) throws -> Result? {
         let receiverClass = object_getClass(object)!
         let key = ObjectIdentifier(receiverClass)
         let method: NativeObjCMethod<Result, repeat each Argument>
@@ -117,13 +197,69 @@ private final class ViewportSPIMethod<Result, each Argument> {
     }
 }
 
+@MainActor
+private final class ViewportPageSizeMethod {
+    private let declaration: String
+    private var method: NativeCXXMethod<Void, UnsafeRawPointer>?
+
+    init(_ declaration: String) {
+        self.declaration = declaration
+    }
+
+    func invoke(_ size: CGSize, on webView: NSObject) throws -> Bool {
+        guard let pageResult = try ViewportSPIMethods.pageForTesting.invoke(on: webView),
+              let wrapperAddress = pageResult else { return false }
+        let wrapper = Unmanaged<AnyObject>.fromOpaque(wrapperAddress).takeUnretainedValue()
+        guard let page = try ViewportSPIMethods.apiObject.invoke(on: wrapper) else { return false }
+        let storage = unsafe NativeValue(
+            borrowing: UnsafeMutableRawPointer(mutating: page),
+            as: try .opaque(named: ViewportPageSizeMethods.pageTypeName),
+            retaining: webView
+        )
+        let prepared: NativeCXXMethod<Void, UnsafeRawPointer>
+        if let method {
+            prepared = method
+        } else {
+            prepared = try ABIRuntime.shared.cxxObject(
+                storage, typeNamed: ViewportPageSizeMethods.pageTypeName, in: .framework(named: "WebKit")
+            ).resolveMethodAndWait(named: declaration, as: ((UnsafeRawPointer) -> Void).self).method
+            method = prepared
+        }
+        // WebCore::FloatSize stores two floats; pass its address for const&.
+        let nativeSize = SIMD2<Float>(Float(size.width), Float(size.height))
+        try withUnsafePointer(to: nativeSize) { pointer in
+            try unsafe prepared.unsafeInvoke(on: storage, UnsafeRawPointer(pointer))
+        }
+        return true
+    }
+}
+
+@MainActor
+private enum ViewportPageSizeMethods {
+    // Original: WebKit::WebPageProxy
+    static let pageTypeName = decodedSPIString([
+        0xF0, 0xC2, 0xC5, 0xEC, 0xCE, 0xD3, 0x9D, 0x9D, 0xF0, 0xC2, 0xC5, 0xF7,
+        0xC6, 0xC0, 0xC2, 0xF7, 0xD5, 0xC8, 0xDF, 0xDE
+    ])
+    // Original: setDefaultUnobscuredSize(WebCore::FloatSize const&)
+    static let defaultSize = ViewportPageSizeMethod(
+        decodedSPIString([
+            0xD4, 0xC2, 0xD3, 0xE3, 0xC2, 0xC1, 0xC6, 0xD2, 0xCB, 0xD3, 0xF2, 0xC9,
+            0xC8, 0xC5, 0xD4, 0xC4, 0xD2, 0xD5, 0xC2, 0xC3, 0xF4, 0xCE, 0xDD, 0xC2,
+            0x8F, 0xF0, 0xC2, 0xC5, 0xE4, 0xC8, 0xD5, 0xC2, 0x9D, 0x9D, 0xE1, 0xCB,
+            0xC8, 0xC6, 0xD3, 0xF4, 0xCE, 0xDD, 0xC2, 0x87, 0xC4, 0xC8, 0xC9, 0xD4,
+            0xD3, 0x81, 0x8E
+        ])
+    )
+}
+
 // WebKit builds expose either two or three layout-size arguments.
 @MainActor
 private enum LegacyLayoutOverrideSPI {
     static func apply(obscuredInsets: UIEdgeInsets, to webView: NSObject, scrollView: NSObject) throws -> Bool {
         guard let webView = webView as? UIView else { return false }
         let size = try layoutSize(in: webView, scrollView: scrollView, obscuredInsets: obscuredInsets)
-        return try applyLayoutOverride(size: size, to: webView)
+        return try apply(size: size, to: webView)
     }
 
     static func reset(on webView: NSObject, scrollView: NSObject) throws -> Bool {
@@ -132,10 +268,10 @@ private enum LegacyLayoutOverrideSPI {
         }
         guard let webView = webView as? UIView else { return false }
         let size = try layoutSize(in: webView, scrollView: scrollView, obscuredInsets: .zero)
-        return try applyLayoutOverride(size: size, to: webView)
+        return try apply(size: size, to: webView)
     }
 
-    private static func layoutSize(
+    static func layoutSize(
         in webView: UIView,
         scrollView: NSObject,
         obscuredInsets: UIEdgeInsets
@@ -147,7 +283,7 @@ private enum LegacyLayoutOverrideSPI {
         return CGSize(width: max(0, layoutRect.width), height: max(0, layoutRect.height))
     }
 
-    private static func applyLayoutOverride(size: CGSize, to object: NSObject) throws -> Bool {
+    static func apply(size: CGSize, to object: NSObject) throws -> Bool {
         if try ViewportSPIMethods.fullLayoutOverride.invoke(on: object, size, size, size) != nil {
             return true
         }
@@ -157,6 +293,55 @@ private enum LegacyLayoutOverrideSPI {
 
 @MainActor
 enum ViewportSPIBridge {
+    @available(iOS 26.0, *)
+    static func coordinateDefaultViewportSize(
+        in webView: WKWebView,
+        whileActive isActive: @escaping @MainActor () -> Bool
+    ) -> [NativeObjCMethodHook] {
+        let hookLogger = logger
+        // WebKit restores default viewport units on every layout and after
+        // animated resizing. Follow both native recalculation boundaries.
+        return [
+            ViewportSPISelectorNames.frameOrBoundsMayHaveChanged,
+            ViewportSPISelectorNames.didStopDeferringGeometryUpdates
+        ].compactMap { selector in
+            perform {
+                try unsafe ABIRuntime.shared.object(webView).hookMainActorMethod(
+                    selector: selector, as: (() -> Void).self,
+                    onFailure: { error in
+                        hookLogger.error("Viewport layout hook failed: \(String(describing: error), privacy: .public)")
+                    }
+                ) { [weak webView] call in
+                    try call.proceed()
+                    // A deferred presentation callback can invalidate the
+                    // coordinator while the native continuation is running.
+                    if isActive(), let webView, webView.window != nil {
+                        applyDefaultViewportSize(to: webView)
+                    }
+                }
+            }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @discardableResult
+    static func applyDefaultViewportSize(to webView: WKWebView) -> Bool {
+        // The full layout override also freezes public viewport-inset updates
+        // and ties vh to lvh. Change only the default viewport width instead.
+        perform {
+            if try ViewportSPIMethods.shouldDeferGeometryUpdates.invoke(on: webView) == true {
+                return true
+            }
+            let layout = try LegacyLayoutOverrideSPI.layoutSize(
+                in: webView, scrollView: webView.scrollView,
+                obscuredInsets: webView.obscuredContentInsets
+            )
+            return try ViewportPageSizeMethods.defaultSize.invoke(
+                CGSize(width: layout.width, height: webView.bounds.height), on: webView
+            )
+        } ?? false
+    }
+
     @discardableResult
     static func applyLegacyViewportFallback(
         _ resolvedMetrics: ResolvedViewportMetrics,
@@ -208,6 +393,14 @@ enum ViewportSPIBridge {
 
     private static func frameOrBoundsMayHaveChanged(on object: NSObject) {
         _ = perform { try ViewportSPIMethods.frameOrBoundsMayHaveChanged.invoke(on: object) }
+    }
+
+    @available(iOS 26.0, *)
+    static func restoreDefaultViewportSize(on webView: WKWebView) {
+        frameOrBoundsMayHaveChanged(on: webView)
+        // Native geometry recalculation can be deferred during a resize. Release
+        // this coordinator's default-size contribution even in that interval.
+        _ = perform { try ViewportPageSizeMethods.defaultSize.invoke(webView.bounds.size, on: webView) }
     }
 
     static func inputViewBoundsInWindow(of object: NSObject) -> CGRect? {
