@@ -22,17 +22,27 @@ struct ViewportCoordinatorTests {
             UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 240),
             maximumViewportInset: UIEdgeInsets(top: 80, left: 0, bottom: 20, right: 280)
         )
-        webView.loadHTMLString("""
-            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-            <body><script>
-            for (const unit of ['vw', 'vh', 'lvw', 'lvh', 'svw', 'svh']) {
-                const element = document.createElement('div');
-                element.id = unit;
-                element.style.cssText = `position:fixed;visibility:hidden;width:100${unit};height:1px`;
-                document.body.append(element);
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
             }
-            </script></body>
-            """, baseURL: nil)
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <body><script>
+                for (const unit of ['vw', 'vh', 'lvw', 'lvh', 'svw', 'svh']) {
+                    const element = document.createElement('div');
+                    element.id = unit;
+                    element.style.cssText = `position:fixed;visibility:hidden;width:100${unit};height:1px`;
+                    document.body.append(element);
+                }
+                </script></body>
+                """, baseURL: nil)
+        }
 
         func expectUnits(_ expected: [Double]) async throws {
             var actual: [Double] = []
@@ -92,10 +102,20 @@ struct ViewportCoordinatorTests {
         coordinator.update()
         try #require(webView.scrollView.adjustedContentInset.left > 0)
         try #require(webView.scrollView.adjustedContentInset.right > 0)
-        webView.loadHTMLString("""
-            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-            <div id="width" style="width:100vw;height:1px"></div>
-            """, baseURL: nil)
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
+            }
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <div id="width" style="width:100vw;height:1px"></div>
+                """, baseURL: nil)
+        }
 
         for additionalRightInset: CGFloat in [0, 12] {
             coordinator.additionalObscuredContentInsets.right = additionalRightInset
