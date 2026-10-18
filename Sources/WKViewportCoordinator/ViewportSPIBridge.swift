@@ -259,7 +259,7 @@ private enum LegacyLayoutOverrideSPI {
     static func apply(obscuredInsets: UIEdgeInsets, to webView: NSObject, scrollView: NSObject) throws -> Bool {
         guard let webView = webView as? UIView else { return false }
         let size = try layoutSize(in: webView, scrollView: scrollView, obscuredInsets: obscuredInsets)
-        return try apply(size: size, to: webView)
+        return try applyLayoutOverride(size: size, to: webView)
     }
 
     static func reset(on webView: NSObject, scrollView: NSObject) throws -> Bool {
@@ -268,10 +268,10 @@ private enum LegacyLayoutOverrideSPI {
         }
         guard let webView = webView as? UIView else { return false }
         let size = try layoutSize(in: webView, scrollView: scrollView, obscuredInsets: .zero)
-        return try apply(size: size, to: webView)
+        return try applyLayoutOverride(size: size, to: webView)
     }
 
-    static func layoutSize(
+    private static func layoutSize(
         in webView: UIView,
         scrollView: NSObject,
         obscuredInsets: UIEdgeInsets
@@ -283,7 +283,7 @@ private enum LegacyLayoutOverrideSPI {
         return CGSize(width: max(0, layoutRect.width), height: max(0, layoutRect.height))
     }
 
-    static func apply(size: CGSize, to object: NSObject) throws -> Bool {
+    private static func applyLayoutOverride(size: CGSize, to object: NSObject) throws -> Bool {
         if try ViewportSPIMethods.fullLayoutOverride.invoke(on: object, size, size, size) != nil {
             return true
         }
@@ -332,12 +332,11 @@ enum ViewportSPIBridge {
             if try ViewportSPIMethods.shouldDeferGeometryUpdates.invoke(on: webView) == true {
                 return true
             }
-            let layout = try LegacyLayoutOverrideSPI.layoutSize(
-                in: webView, scrollView: webView.scrollView,
-                obscuredInsets: webView.obscuredContentInsets
-            )
+            // The explicit obscured insets already reflect the selected edges.
+            // System scroll insets can still include edges excluded from layout.
+            let layout = webView.bounds.inset(by: webView.obscuredContentInsets)
             return try ViewportPageSizeMethods.defaultSize.invoke(
-                CGSize(width: layout.width, height: webView.bounds.height), on: webView
+                CGSize(width: max(0, layout.width), height: webView.bounds.height), on: webView
             )
         } ?? false
     }

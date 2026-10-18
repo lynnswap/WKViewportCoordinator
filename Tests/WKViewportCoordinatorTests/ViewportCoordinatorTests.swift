@@ -75,6 +75,45 @@ struct ViewportCoordinatorTests {
         try await expectUnits([350, 400, 100, 370, 50, 270])
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    @available(iOS 26.0, *)
+    func excludedHorizontalEdgesPreserveDefaultViewportWidth() async throws {
+        let controller = UIViewController()
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20)
+        let webView = ViewportWebView(frame: .zero)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
+        attach(webView, to: controller.view)
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let coordinator = webView.viewportCoordinator
+        defer { coordinator.invalidate() }
+        coordinator.obscuredContentInsetEdges = [.top, .bottom]
+        window.layoutIfNeeded()
+        coordinator.update()
+        try #require(webView.scrollView.adjustedContentInset.left > 0)
+        try #require(webView.scrollView.adjustedContentInset.right > 0)
+        webView.loadHTMLString("""
+            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+            <div id="width" style="width:100vw;height:1px"></div>
+            """, baseURL: nil)
+
+        for additionalRightInset: CGFloat in [0, 12] {
+            coordinator.additionalObscuredContentInsets.right = additionalRightInset
+            let expectedWidth = webView.bounds.width - additionalRightInset
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            var width: Double?
+            repeat {
+                width = try await webView.evaluateJavaScript(
+                    "document.getElementById('width')?.getBoundingClientRect().width"
+                ) as? Double
+                if let width, abs(width - expectedWidth) <= 1 { break }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            let actualWidth = try #require(width)
+            #expect(abs(actualWidth - expectedWidth) <= 1)
+        }
+    }
+
     @Test
     func hiddenKeyboardGuideDoesNotIncludeContainerSafeArea() throws {
         let host = UIViewController()
