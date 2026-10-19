@@ -126,7 +126,9 @@ jobs:
             version = Regexp.last_match(1).tr("-", ".")
             next unless version.split(".").first == ios_major
 
-            available_devices = runtime_devices.select { |device| device.fetch("isAvailable", true) }
+            available_devices = runtime_devices.select do |device|
+              device.fetch("isAvailable", true) && device["state"] == "Shutdown"
+            end
             preferred_devices = available_devices.select { |device| device["name"].start_with?("iPhone") }
             selected_devices = preferred_devices.empty? ? available_devices : preferred_devices
 
@@ -136,7 +138,7 @@ jobs:
           end
 
           if matches.empty?
-            warn "No available iOS #{ios_major}.x simulator found"
+            warn "No available Shutdown iOS #{ios_major}.x simulator found"
             system("xcrun simctl list devices available")
             exit 1
           end
