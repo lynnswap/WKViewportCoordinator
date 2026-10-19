@@ -15,12 +15,13 @@ def simctl(*arguments):
     subprocess.run(command, check=True, timeout=60)
 
 
-def prepare(state_path, destination):
+def prepare(state_path, destination, *, preboot):
     fields = dict(component.split("=", 1) for component in destination.split(","))
     udid = fields["id"]
     # Resolve selects an unused Shutdown device on this disposable job runner.
     state_path.write_text(json.dumps({"udid": udid}) + "\n")
-    simctl("boot", udid)
+    if preboot:
+        simctl("boot", udid)
 
 
 def cleanup(state_path):
@@ -33,10 +34,11 @@ def cleanup(state_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "cleanup"))
-    operation = parser.parse_args().operation
+    parser.add_argument("--preboot", action="store_true")
+    arguments = parser.parse_args()
     state_path = Path(os.environ["RUNNER_TEMP"]) / "ci-simulator.json"
-    if operation == "prepare":
-        prepare(state_path, os.environ["DESTINATION"])
+    if arguments.operation == "prepare":
+        prepare(state_path, os.environ["DESTINATION"], preboot=arguments.preboot)
     else:
         cleanup(state_path)
 

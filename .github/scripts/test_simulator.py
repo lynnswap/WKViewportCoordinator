@@ -18,8 +18,18 @@ class SimulatorTests(unittest.TestCase):
 
     def test_preparation_starts_the_selected_device_without_creating_or_waiting(self):
         with patch.object(simulator, "simctl") as command:
-            simulator.prepare(self.state, "platform=iOS Simulator,id=existing")
+            simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=True)
         command.assert_called_once_with("boot", "existing")
+        self.assertEqual(json.loads(self.state.read_text()), {"udid": "existing"})
+        with patch.object(simulator, "simctl") as command:
+            simulator.cleanup(self.state)
+        command.assert_called_once_with("shutdown", "existing")
+        self.assertFalse(self.state.exists())
+
+    def test_deferred_startup_records_the_selected_device_for_cleanup_without_booting(self):
+        with patch.object(simulator, "simctl") as command:
+            simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=False)
+        command.assert_not_called()
         self.assertEqual(json.loads(self.state.read_text()), {"udid": "existing"})
         with patch.object(simulator, "simctl") as command:
             simulator.cleanup(self.state)
@@ -29,7 +39,7 @@ class SimulatorTests(unittest.TestCase):
     def test_boot_failure_keeps_the_selected_identifier_for_cleanup(self):
         with patch.object(simulator, "simctl", side_effect=subprocess.CalledProcessError(1, "boot")):
             with self.assertRaises(subprocess.CalledProcessError):
-                simulator.prepare(self.state, "platform=iOS Simulator,id=existing")
+                simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=True)
         with patch.object(simulator, "simctl") as command:
             simulator.cleanup(self.state)
         command.assert_called_once_with("shutdown", "existing")
