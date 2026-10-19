@@ -161,18 +161,39 @@ jobs:
         run: |
           # Keyboard viewport checks require the software keyboard regardless of runner host state.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
-          xcrun simctl shutdown "${SIMULATOR_UDID}" || true
 
-      - name: Run package tests
+      - name: Test Simulator helper
+        run: python3 -m unittest discover -s .github/scripts -p 'test_simulator.py'
+
+      - name: Start the test Simulator
+        run: python3 .github/scripts/simulator.py prepare
+
+      - name: Build package tests
         run: |
           DERIVED_DATA_PATH="${RUNNER_TEMP}/DerivedData"
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -scheme WKViewportCoordinator \
             -destination "${DESTINATION}" \
             -derivedDataPath "${DERIVED_DATA_PATH}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
+            -only-testing:WKViewportCoordinatorTests
+
+      - name: Wait for the test Simulator
+        run: python3 .github/scripts/simulator.py wait
+
+      - name: Run prepared tests
+        run: |
+          products="${RUNNER_TEMP}/DerivedData/Build/Products"
+          manifests=("${products}"/*.xctestrun)
+          test "${#manifests[@]}" -eq 1
+          xcodebuild test-without-building \
+            -xctestrun "${manifests[0]}" \
+            -destination "${DESTINATION}" \
+            -enableCodeCoverage NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -parallel-testing-enabled NO \
             -only-testing:WKViewportCoordinatorTests
 
       - name: Run MiniBrowser self-test
@@ -187,7 +208,6 @@ jobs:
           APP_PATH="${DERIVED_DATA_PATH}/Build/Products/Debug-iphonesimulator/MiniBrowser.app"
           test -d "${APP_PATH}"
 
-          xcrun simctl boot "${SIMULATOR_UDID}" || true
           xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
           xcrun simctl install "${SIMULATOR_UDID}" "${APP_PATH}"
 
@@ -233,3 +253,7 @@ jobs:
             abort("MiniBrowser self-test emitted invalid JSON: #{error.message}")
           end
           RUBY
+
+      - name: Clean up the test Simulator
+        if: always()
+        run: python3 .github/scripts/simulator.py cleanup
