@@ -33,16 +33,20 @@ jobs:
             ios_major: '18'
             runtime_version: '18.6'
             timeout_minutes: 30
+            # iOS 18 test preparation stalled with early boot; let xcodebuild start it.
+            preboot: false
           - name: iOS 26 latest
             runner: macos-26
             xcode_major: '26'
             ios_major: '26'
             timeout_minutes: 20
+            preboot: true
           - name: iOS 27 latest
             runner: xcode-27
             xcode_major: '27'
             ios_major: '27'
             timeout_minutes: 20
+            preboot: true
     runs-on: ${{ matrix.runner }}
     env:
       XCODE_MAJOR: ${{ matrix.xcode_major }}
@@ -126,7 +130,9 @@ jobs:
             version = Regexp.last_match(1).tr("-", ".")
             next unless version.split(".").first == ios_major
 
-            available_devices = runtime_devices.select { |device| device.fetch("isAvailable", true) }
+            available_devices = runtime_devices.select do |device|
+              device.fetch("isAvailable", true) && device["state"] == "Shutdown"
+            end
             preferred_devices = available_devices.select { |device| device["name"].start_with?("iPhone") }
             selected_devices = preferred_devices.empty? ? available_devices : preferred_devices
 
@@ -136,7 +142,7 @@ jobs:
           end
 
           if matches.empty?
-            warn "No available iOS #{ios_major}.x simulator found"
+            warn "No available Shutdown iOS #{ios_major}.x simulator found"
             system("xcrun simctl list devices available")
             exit 1
           end
@@ -161,7 +167,12 @@ jobs:
         run: |
           # Keyboard viewport checks require the software keyboard regardless of runner host state.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
-          xcrun simctl shutdown "${SIMULATOR_UDID}" || true
+
+      - name: Test Simulator helper
+        run: python3 -m unittest discover -s .github/scripts -p 'test_simulator.py'
+
+      - name: Prepare the test Simulator
+        run: python3 .github/scripts/simulator.py prepare ${{ matrix.preboot && '--preboot' || '' }}
 
       - name: Run package tests
         run: |
@@ -187,7 +198,6 @@ jobs:
           APP_PATH="${DERIVED_DATA_PATH}/Build/Products/Debug-iphonesimulator/MiniBrowser.app"
           test -d "${APP_PATH}"
 
-          xcrun simctl boot "${SIMULATOR_UDID}" || true
           xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
           xcrun simctl install "${SIMULATOR_UDID}" "${APP_PATH}"
 
@@ -233,3 +243,7 @@ jobs:
             abort("MiniBrowser self-test emitted invalid JSON: #{error.message}")
           end
           RUBY
+
+      - name: Clean up the test Simulator
+        if: always()
+        run: python3 .github/scripts/simulator.py cleanup

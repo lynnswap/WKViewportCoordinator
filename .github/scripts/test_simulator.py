@@ -1,0 +1,73 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import simulator
+
+
+class SimulatorTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state = Path(self.temporary.name) / "state.json"
+
+    def test_preparation_starts_the_selected_device_without_creating_or_waiting(self):
+        with patch.object(simulator, "simctl") as command:
+            simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=True)
+        command.assert_called_once_with("boot", "existing")
+        self.assertEqual(json.loads(self.state.read_text()), {"udid": "existing"})
+        with patch.object(simulator, "simctl") as command:
+            simulator.cleanup(self.state)
+        command.assert_called_once_with("shutdown", "existing")
+        self.assertFalse(self.state.exists())
+
+    def test_deferred_startup_records_the_selected_device_for_cleanup_without_booting(self):
+        with patch.object(simulator, "simctl") as command:
+            simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=False)
+        command.assert_not_called()
+        self.assertEqual(json.loads(self.state.read_text()), {"udid": "existing"})
+        with patch.object(simulator, "simctl") as command:
+            simulator.cleanup(self.state)
+        command.assert_called_once_with("shutdown", "existing")
+        self.assertFalse(self.state.exists())
+
+    def test_boot_failure_keeps_the_selected_identifier_for_cleanup(self):
+        with patch.object(simulator, "simctl", side_effect=subprocess.CalledProcessError(1, "boot")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                simulator.prepare(self.state, "platform=iOS Simulator,id=existing", preboot=True)
+        with patch.object(simulator, "simctl") as command:
+            simulator.cleanup(self.state)
+        command.assert_called_once_with("shutdown", "existing")
+
+    def test_cleanup_without_preparation_does_not_touch_existing_devices(self):
+        with patch.object(simulator, "simctl") as command:
+            simulator.cleanup(self.state)
+        command.assert_not_called()
+
+    def test_cleanup_failure_is_reported_and_keeps_the_selected_identifier(self):
+        self.state.write_text(json.dumps({"udid": "owned"}))
+        with patch.object(simulator, "simctl", side_effect=subprocess.CalledProcessError(1, "shutdown")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                simulator.cleanup(self.state)
+        self.assertTrue(self.state.exists())
+
+    def test_action_output_survives_failure(self):
+        fake_bin = Path(self.temporary.name) / "bin"
+        fake_bin.mkdir()
+        fake_xcrun = fake_bin / "xcrun"
+        fake_xcrun.write_text("#!/bin/sh\nprintf 'Simulator startup failed\\n'\nexit 7\n")
+        fake_xcrun.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, "-c", "import simulator; simulator.simctl('boot', 'existing')"],
+            cwd=Path(__file__).resolve().parent,
+            env=dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"]),
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Simulator startup failed", result.stdout)
+        self.assertIn("CalledProcessError", result.stderr)
