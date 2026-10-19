@@ -22,11 +22,8 @@ class SimulatorTests(unittest.TestCase):
         command.assert_called_once_with("boot", "existing")
         self.assertEqual(json.loads(self.state.read_text()), {"udid": "existing"})
         with patch.object(simulator, "simctl") as command:
-            simulator.wait(self.state)
             simulator.cleanup(self.state)
-        self.assertEqual(command.call_args_list[0].args, ("bootstatus", "existing", "-b"))
-        self.assertEqual(command.call_args_list[0].kwargs, {"timeout": 300})
-        self.assertEqual(command.call_args_list[1].args, ("shutdown", "existing"))
+        command.assert_called_once_with("shutdown", "existing")
         self.assertFalse(self.state.exists())
 
     def test_boot_failure_keeps_the_selected_identifier_for_cleanup(self):
@@ -42,13 +39,6 @@ class SimulatorTests(unittest.TestCase):
             simulator.cleanup(self.state)
         command.assert_not_called()
 
-    def test_boot_wait_failure_is_not_a_success_and_preserves_cleanup_state(self):
-        self.state.write_text(json.dumps({"udid": "owned"}))
-        with patch.object(simulator, "simctl", side_effect=subprocess.TimeoutExpired("bootstatus", 300)):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                simulator.wait(self.state)
-        self.assertTrue(self.state.exists())
-
     def test_cleanup_failure_is_reported_and_keeps_the_selected_identifier(self):
         self.state.write_text(json.dumps({"udid": "owned"}))
         with patch.object(simulator, "simctl", side_effect=subprocess.CalledProcessError(1, "shutdown")):
@@ -60,14 +50,14 @@ class SimulatorTests(unittest.TestCase):
         fake_bin = Path(self.temporary.name) / "bin"
         fake_bin.mkdir()
         fake_xcrun = fake_bin / "xcrun"
-        fake_xcrun.write_text("#!/bin/sh\nprintf 'Waiting on DataMigration\\n'\nexit 7\n")
+        fake_xcrun.write_text("#!/bin/sh\nprintf 'Simulator startup failed\\n'\nexit 7\n")
         fake_xcrun.chmod(0o755)
         result = subprocess.run(
-            [sys.executable, "-c", "import simulator; simulator.simctl('bootstatus', 'owned', '-b')"],
+            [sys.executable, "-c", "import simulator; simulator.simctl('boot', 'existing')"],
             cwd=Path(__file__).resolve().parent,
             env=dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"]),
             capture_output=True, text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Waiting on DataMigration", result.stdout)
+        self.assertIn("Simulator startup failed", result.stdout)
         self.assertIn("CalledProcessError", result.stderr)

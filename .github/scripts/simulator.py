@@ -9,10 +9,10 @@ import shlex
 import subprocess
 
 
-def simctl(*arguments, timeout=60):
+def simctl(*arguments):
     command = ["xcrun", "simctl", *arguments]
     print(datetime.datetime.now(datetime.timezone.utc).isoformat(), shlex.join(command), flush=True)
-    subprocess.run(command, check=True, timeout=timeout)
+    subprocess.run(command, check=True, timeout=60)
 
 
 def prepare(state_path, destination):
@@ -21,11 +21,6 @@ def prepare(state_path, destination):
     # Resolve selects an unused Shutdown device on this disposable job runner.
     state_path.write_text(json.dumps({"udid": udid}) + "\n")
     simctl("boot", udid)
-
-
-def wait(state_path):
-    state = json.loads(state_path.read_text())
-    simctl("bootstatus", state["udid"], "-b", timeout=300)
 
 
 def cleanup(state_path):
@@ -37,13 +32,11 @@ def cleanup(state_path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "wait", "cleanup"))
+    parser.add_argument("operation", choices=("prepare", "cleanup"))
     operation = parser.parse_args().operation
     state_path = Path(os.environ["RUNNER_TEMP"]) / "ci-simulator.json"
     if operation == "prepare":
         prepare(state_path, os.environ["DESTINATION"])
-    elif operation == "wait":
-        wait(state_path)
     else:
         cleanup(state_path)
 

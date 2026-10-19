@@ -170,32 +170,16 @@ jobs:
       - name: Start the test Simulator
         run: python3 .github/scripts/simulator.py prepare
 
-      - name: Build package tests
+      - name: Run package tests
         run: |
           DERIVED_DATA_PATH="${RUNNER_TEMP}/DerivedData"
-          xcodebuild build-for-testing \
+          xcodebuild test \
             -scheme WKViewportCoordinator \
             -destination "${DESTINATION}" \
             -derivedDataPath "${DERIVED_DATA_PATH}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
-            -only-testing:WKViewportCoordinatorTests
-
-      - name: Wait for the test Simulator
-        run: python3 .github/scripts/simulator.py wait
-
-      - name: Run prepared tests
-        run: |
-          products="${RUNNER_TEMP}/DerivedData/Build/Products"
-          manifests=("${products}"/*.xctestrun)
-          test "${#manifests[@]}" -eq 1
-          xcodebuild test-without-building \
-            -xctestrun "${manifests[0]}" \
-            -destination "${DESTINATION}" \
-            -enableCodeCoverage NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            -parallel-testing-enabled NO \
             -only-testing:WKViewportCoordinatorTests
 
       - name: Run MiniBrowser self-test
