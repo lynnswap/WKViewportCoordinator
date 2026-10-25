@@ -187,7 +187,9 @@ private final class ViewportSPIMethod<Result, each Argument> {
             method = cached
         } else {
             do {
-                method = try ABIRuntime.shared.object(object).resolveMethodAndWait(selector: selector, as: signature).method
+                method = try ABIRuntime.shared.object(object).resolveAndWait(
+                    .objc(.method(selector, as: signature))
+                ).method
             } catch ABIResolutionError.declarationNotFound {
                 return nil
             }
@@ -222,7 +224,7 @@ private final class ViewportPageSizeMethod {
         } else {
             prepared = try ABIRuntime.shared.cxxObject(
                 storage, typeNamed: ViewportPageSizeMethods.pageTypeName, in: .framework(named: "WebKit")
-            ).resolveMethodAndWait(named: declaration, as: ((UnsafeRawPointer) -> Void).self).method
+            ).resolveAndWait(.cxx(.method(declaration, as: ((UnsafeRawPointer) -> Void).self))).method
             method = prepared
         }
         // WebCore::FloatSize stores two floats; pass its address for const&.
@@ -306,8 +308,8 @@ enum ViewportSPIBridge {
             ViewportSPISelectorNames.didStopDeferringGeometryUpdates
         ].compactMap { selector in
             perform {
-                try unsafe ABIRuntime.shared.object(webView).hookMainActorMethod(
-                    selector: selector, as: (() -> Void).self,
+                try unsafe ABIRuntime.shared.object(webView).hookMainActorCalls(
+                    .objc(.method(selector, as: (() -> Void).self)),
                     onFailure: { error in
                         hookLogger.error("Viewport layout hook failed: \(String(describing: error), privacy: .public)")
                     }
