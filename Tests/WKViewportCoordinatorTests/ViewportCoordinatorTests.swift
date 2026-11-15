@@ -134,6 +134,48 @@ struct ViewportCoordinatorTests {
         }
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    @available(iOS 26.0, *)
+    func pageStaysWithinAnUnobscuredWidthThatWebKitWouldRoundUp() async throws {
+        let controller = UIViewController()
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        controller.view.addSubview(webView)
+        let window = makeWindow(rootViewController: controller)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let navigationDelegate = TestNavigationCompletionDelegate()
+        webView.navigationDelegate = navigationDelegate
+        defer {
+            withExtendedLifetime(navigationDelegate) {
+                webView.navigationDelegate = nil
+            }
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString("""
+                <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+                <body style="margin:0;height:2000px"></body>
+                """, baseURL: nil)
+        }
+        let coordinator = ViewportCoordinator(webView: webView)
+        defer { coordinator.invalidate() }
+        // One pixel past 100 points leaves 289 points and at least half a point more.
+        coordinator.additionalObscuredContentInsets.right = 100 + 1 / window.screen.scale
+
+        let scrollView = webView.scrollView
+        var pageWidth: Double?
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        repeat {
+            pageWidth = try await webView.evaluateJavaScript("innerWidth") as? Double
+            if pageWidth == 289, scrollView.contentSize.width == 289 { break }
+            await Task.yield()
+        } while ContinuousClock.now < deadline
+        #expect(pageWidth == 289)
+        let scrollableWidth = scrollView.contentSize.width
+            + scrollView.adjustedContentInset.left + scrollView.adjustedContentInset.right
+        #expect(scrollableWidth <= scrollView.bounds.width)
+    }
+
     @Test
     func hiddenKeyboardGuideDoesNotIncludeContainerSafeArea() throws {
         let host = UIViewController()
