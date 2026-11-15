@@ -37,6 +37,27 @@ struct ViewportMetrics: Equatable {
     private var baseObscuredInsets: UIEdgeInsets {
         obscuredInsets.wk_adding(additionalObscuredContentInsets)
     }
+
+    /// Extends a horizontal inset so that WebKit does not round the unobscured width up.
+    ///
+    /// WebKit lays out a `width=device-width` page at the whole number of points nearest
+    /// to the unobscured width. Rounded up, the page is wider than the area that shows
+    /// it, and scrolls sideways.
+    mutating func keepPageWidthWithinUnobscuredWidth(of bounds: CGRect, screenScale: CGFloat) {
+        guard screenScale > 0 else { return }
+        let insets = finalObscuredInsets.wk_roundedToPixel(screenScale)
+        let width = bounds.width - insets.left - insets.right
+        // WebKit rounds the width in single precision.
+        guard width > 0, Float(width).rounded() > Float(width) else { return }
+        // The resolved insets are rounded to pixels, so extend by whole pixels. Rounding
+        // down leaves the width less than a pixel above a whole point, which WebKit rounds down.
+        let pixels = ((width - width.rounded(.down)) * screenScale + 0.001).rounded(.down)
+        if insets.left > insets.right {
+            obscuredInsets.left += pixels / screenScale
+        } else {
+            obscuredInsets.right += pixels / screenScale
+        }
+    }
 }
 
 /// Geometry is expressed in the web view's coordinates, including when its
@@ -452,6 +473,7 @@ public final class ViewportCoordinator: NSObject {
             obscuredContentInsetEdges: storedObscuredContentInsetEdges
         )
         effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets
+        effectiveMetrics.keepPageWidthWithinUnobscuredWidth(of: webView.bounds, screenScale: window.screen.scale)
 
         lastKnownWindowScreen = window.screen
         let resolvedMetrics = ResolvedViewportMetrics(
