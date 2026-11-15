@@ -1679,20 +1679,13 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
-    func viewportMetricsClampAdditionalObscuredInsetsToNonNegativeValues() {
-        let metrics = ViewportMetrics(
-            safeArea: .init(
-                viewport: .zero,
-                legacyFallbackBaseline: .zero
-            ),
-            obscuredInsets: UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0),
-            keyboardOverlapHeight: 5,
-            inputAccessoryOverlapHeight: 8,
-            additionalObscuredContentInsets: UIEdgeInsets(top: -4, left: -3, bottom: 7, right: 2)
-        )
+    func additionalObscuredContentInsetsTreatNegativeValuesAsZero() {
+        let coordinator = ViewportCoordinator(webView: WKWebView(frame: .zero))
+        defer { coordinator.invalidate() }
 
-        #expect(metrics.finalObscuredInsets == UIEdgeInsets(top: 10, left: 0, bottom: 27, right: 2))
-        #expect(metrics.scrollFallbackObscuredInsets == UIEdgeInsets(top: 10, left: 0, bottom: 27, right: 2))
+        coordinator.additionalObscuredContentInsets = UIEdgeInsets(top: -4, left: -3, bottom: 7, right: 2)
+
+        #expect(coordinator.additionalObscuredContentInsets == UIEdgeInsets(top: 0, left: 0, bottom: 7, right: 2))
     }
 
     @Test
