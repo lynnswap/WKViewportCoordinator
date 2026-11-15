@@ -35,7 +35,7 @@ struct ViewportMetrics: Equatable {
     }
 
     private var baseObscuredInsets: UIEdgeInsets {
-        obscuredInsets.wk_clampedNonNegative.wk_adding(additionalObscuredContentInsets.wk_clampedNonNegative)
+        obscuredInsets.wk_adding(additionalObscuredContentInsets)
     }
 }
 
@@ -413,8 +413,7 @@ public final class ViewportCoordinator: NSObject {
         }
         guard
             let observationContainerView = resolvedObservationContainerView(),
-            observationContainerView.window != nil,
-            webView.window != nil
+            let window = observationContainerView.window
         else {
             clearInactiveViewportStateIfNeeded(
                 resolvedHostViewController: resolvedHostViewController(),
@@ -427,8 +426,7 @@ public final class ViewportCoordinator: NSObject {
 
         guard
             let hostViewController = resolvedHostViewController,
-            hostViewController.view != nil,
-            hostViewController.view.window != nil
+            hostViewController.viewIfLoaded?.window != nil
         else {
             clearInactiveViewportStateIfNeeded(
                 resolvedHostViewController: resolvedHostViewController,
@@ -453,16 +451,13 @@ public final class ViewportCoordinator: NSObject {
             includesNavigationBar: includesNavigationBar,
             obscuredContentInsetEdges: storedObscuredContentInsetEdges
         )
-        effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets.wk_clampedNonNegative
+        effectiveMetrics.additionalObscuredContentInsets = additionalObscuredContentInsets
 
-        let screenScale = observationContainerView.window?.screen.scale
-            ?? webView.window?.screen.scale
-            ?? observationContainerView.traitCollection.displayScale
-        lastKnownWindowScreen = observationContainerView.window?.screen ?? webView.window?.screen
+        lastKnownWindowScreen = window.screen
         let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
             contentInsetAdjustmentBehavior: webView.scrollView.contentInsetAdjustmentBehavior,
-            screenScale: screenScale
+            screenScale: window.screen.scale
         )
         let contentScrollInset: UIEdgeInsets?
         let legacyLayoutViewportSize: CGSize?
@@ -587,11 +582,9 @@ public final class ViewportCoordinator: NSObject {
         observationView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         observationView.isUserInteractionEnabled = false
         observationView.backgroundColor = .clear
-        if #available(iOS 15.0, *) {
-            observationView.keyboardLayoutGuide.followsUndockedKeyboard = true
-            // A hidden keyboard must not reintroduce native chrome as keyboard overlap.
-            observationView.keyboardLayoutGuide.usesBottomSafeArea = false
-        }
+        observationView.keyboardLayoutGuide.followsUndockedKeyboard = true
+        // A hidden keyboard must not reintroduce native chrome as keyboard overlap.
+        observationView.keyboardLayoutGuide.usesBottomSafeArea = false
         hostView.addSubview(observationView)
         hostView.sendSubviewToBack(observationView)
 
@@ -742,15 +735,11 @@ public final class ViewportCoordinator: NSObject {
             return 0
         }
 
-        if #available(iOS 15.0, *) {
-            let layoutFrame = observationView.bounds.intersection(observationView.keyboardLayoutGuide.layoutFrame)
-            guard layoutFrame.isEmpty == false else {
-                return 0
-            }
-            return max(0, hostView.bounds.intersection(hostView.convert(layoutFrame, from: observationView)).height)
+        let layoutFrame = observationView.bounds.intersection(observationView.keyboardLayoutGuide.layoutFrame)
+        guard layoutFrame.isEmpty == false else {
+            return 0
         }
-
-        return 0
+        return max(0, hostView.bounds.intersection(hostView.convert(layoutFrame, from: observationView)).height)
     }
 
     private func inputAccessoryOverlapHeight(in hostView: UIView?) -> CGFloat {
@@ -769,50 +758,29 @@ public final class ViewportCoordinator: NSObject {
 
     private func observeKeyboardNotifications() {
         let center = NotificationCenter.default
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification] {
+            center.addObserver(self, selector: #selector(handleKeyboardFrameChange(_:)), name: name, object: nil)
+        }
         center.addObserver(
             self,
-            selector: #selector(handleKeyboardWillChangeFrame(_:)),
-            name: UIResponder.keyboardWillChangeFrameNotification,
-            object: nil
-        )
-        center.addObserver(
-            self,
-            selector: #selector(handleKeyboardDidChangeFrame(_:)),
-            name: UIResponder.keyboardDidChangeFrameNotification,
-            object: nil
-        )
-        center.addObserver(
-            self,
-            selector: #selector(handleKeyboardWillHide(_:)),
+            selector: #selector(handleKeyboardWillHide),
             name: UIResponder.keyboardWillHideNotification,
             object: nil
         )
     }
 
     @objc
-    private func handleKeyboardWillChangeFrame(_ notification: Notification) {
-        handleKeyboardNotification(notification, resetFrame: false)
-    }
-
-    @objc
-    private func handleKeyboardDidChangeFrame(_ notification: Notification) {
-        handleKeyboardNotification(notification, resetFrame: false)
-    }
-
-    @objc
-    private func handleKeyboardWillHide(_ notification: Notification) {
-        handleKeyboardNotification(notification, resetFrame: true)
-    }
-
-    private func handleKeyboardNotification(_ notification: Notification, resetFrame: Bool) {
-        guard let endFrameValue = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
+    private func handleKeyboardFrameChange(_ notification: Notification) {
+        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
             return
         }
+        keyboardFrameInScreen = endFrame.cgRectValue
+        update()
+    }
 
-        keyboardFrameInScreen = endFrameValue.cgRectValue
-        if resetFrame {
-            keyboardFrameInScreen = .null
-        }
+    @objc
+    private func handleKeyboardWillHide() {
+        keyboardFrameInScreen = .null
         update()
     }
 }
@@ -837,7 +805,7 @@ private final class ViewportObservationView: UIView {
     }
 }
 
-extension UIEdgeInsets {
+private extension UIEdgeInsets {
     var wk_clampedNonNegative: UIEdgeInsets {
         UIEdgeInsets(
             top: max(0, top),
@@ -846,9 +814,7 @@ extension UIEdgeInsets {
             right: max(0, right)
         )
     }
-}
 
-private extension UIEdgeInsets {
     func wk_subtractingClamped(_ other: UIEdgeInsets) -> UIEdgeInsets {
         UIEdgeInsets(
             top: max(0, top - other.top),
