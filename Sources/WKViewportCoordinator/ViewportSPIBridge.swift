@@ -159,10 +159,10 @@ private enum ViewportSPIMethods {
     static let shouldDeferGeometryUpdates = ViewportSPIMethod(
         ViewportSPISelectorNames.shouldDeferGeometryUpdates, as: (() -> Bool).self
     )
-    static let apiObject = ViewportSPIMethod(
+    static let apiObject = unsafe ViewportSPIMethod(
         ViewportSPISelectorNames.apiObject, as: (() -> UnsafeRawPointer).self
     )
-    static let pageForTesting = ViewportSPIMethod(
+    static let pageForTesting = unsafe ViewportSPIMethod(
         ViewportSPISelectorNames.pageForTesting, as: (() -> UnsafeRawPointer?).self
     )
 }
@@ -180,7 +180,7 @@ private final class ViewportSPIMethod<Result, each Argument> {
     }
 
     func invoke(on object: AnyObject, _ arguments: repeat each Argument) throws -> Result? {
-        let receiverClass = object_getClass(object)!
+        let receiverClass: AnyClass = object_getClass(object)!
         let key = ObjectIdentifier(receiverClass)
         let method: NativeObjCMethod<Result, repeat each Argument>
         if let cached = methods[key] {
@@ -200,6 +200,7 @@ private final class ViewportSPIMethod<Result, each Argument> {
 }
 
 @MainActor
+@safe
 private final class ViewportPageSizeMethod {
     private let declaration: String
     private var method: NativeCXXMethod<Void, UnsafeRawPointer>?
@@ -209,24 +210,19 @@ private final class ViewportPageSizeMethod {
     }
 
     func invoke(_ size: CGSize, on webView: NSObject) throws -> Bool {
-        guard let pageResult = try ViewportSPIMethods.pageForTesting.invoke(on: webView),
-              let wrapperAddress = pageResult else { return false }
-        let wrapper = Unmanaged<AnyObject>.fromOpaque(wrapperAddress).takeUnretainedValue()
-        guard let page = try ViewportSPIMethods.apiObject.invoke(on: wrapper) else { return false }
+        guard let pageResult = try unsafe ViewportSPIMethods.pageForTesting.invoke(on: webView),
+              let wrapperAddress = unsafe pageResult else { return false }
+        let wrapper = unsafe Unmanaged<AnyObject>.fromOpaque(wrapperAddress).takeUnretainedValue()
+        guard let page = try unsafe ViewportSPIMethods.apiObject.invoke(on: wrapper) else { return false }
         let storage = unsafe NativeValue(
             borrowing: UnsafeMutableRawPointer(mutating: page),
             as: try .opaque(named: ViewportPageSizeMethods.pageTypeName),
             retaining: webView
         )
-        let prepared: NativeCXXMethod<Void, UnsafeRawPointer>
-        if let method {
-            prepared = method
-        } else {
-            prepared = try ABIRuntime.shared.cxxObject(
-                storage, typeNamed: ViewportPageSizeMethods.pageTypeName, in: .framework(named: "WebKit")
-            ).resolveAndWait(.cxx(.method(declaration, as: ((UnsafeRawPointer) -> Void).self))).method
-            method = prepared
-        }
+        let prepared = try unsafe method ?? ABIRuntime.shared.cxxObject(
+            storage, typeNamed: ViewportPageSizeMethods.pageTypeName, in: .framework(named: "WebKit")
+        ).resolveAndWait(.cxx(.method(declaration, as: ((UnsafeRawPointer) -> Void).self))).method
+        unsafe method = prepared
         // WebCore::FloatSize stores two floats; pass its address for const&.
         let nativeSize = SIMD2<Float>(Float(size.width), Float(size.height))
         try withUnsafePointer(to: nativeSize) { pointer in
