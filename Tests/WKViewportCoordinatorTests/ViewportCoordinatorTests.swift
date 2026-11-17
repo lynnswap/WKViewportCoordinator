@@ -664,6 +664,23 @@ struct ViewportCoordinatorTests {
         #expect(geometry.obscuredInsets(includesNavigationBar: false).top == 24)
     }
 
+    @Test
+    func navigationBarExclusionKeepsOnlyTheWindowSafeAreaAboveTheBar() {
+        // An unfolded iPhone lays out the bar beside the system controls, inside the window's top band.
+        let windowInsets = UIEdgeInsets(top: 82, left: 0, bottom: 34, right: 0)
+        let geometry = ViewportGeometry(
+            bounds: CGRect(x: 0, y: 0, width: 669, height: 951),
+            windowSafeAreaInsets: windowInsets,
+            safeAreaInsets: windowInsets,
+            navigationBarFrame: CGRect(x: 0, y: 24, width: 669, height: 58),
+            barFrames: []
+        )
+        #expect(geometry.obscuredInsets(includesNavigationBar: true).top == 82)
+        #expect(geometry.viewportSafeAreaInsets(includesNavigationBar: true) == windowInsets)
+        #expect(geometry.obscuredInsets(includesNavigationBar: false).top == 24)
+        #expect(geometry.viewportSafeAreaInsets(includesNavigationBar: false).top == 24)
+    }
+
     @Test(arguments: [
         CGRect(x: 0, y: -54, width: 100, height: 54),
         CGRect(x: 0, y: 200, width: 100, height: 54),
