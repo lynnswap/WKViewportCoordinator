@@ -69,8 +69,24 @@ struct ViewportGeometry {
     var navigationBarFrame: CGRect?
     var barFrames: [CGRect]
 
+    /// The window's safe area that the page has to keep clear. A navigation bar
+    /// can lie inside the window's top band, as it does beside the system
+    /// controls of an unfolded iPhone. A page that reserves the bar's space
+    /// itself then keeps clear of the band above the bar only.
+    func viewportSafeAreaInsets(includesNavigationBar: Bool) -> UIEdgeInsets {
+        var insets = windowSafeAreaInsets
+        if !includesNavigationBar, let navigationBarFrame {
+            let overlap = bounds.intersection(navigationBarFrame)
+            if !overlap.isEmpty {
+                insets.top = min(insets.top, overlap.minY - bounds.minY)
+            }
+        }
+        return insets
+    }
+
     func obscuredInsets(includesNavigationBar: Bool) -> UIEdgeInsets {
-        var insets = windowSafeAreaInsets.wk_maxPerEdge(with: safeAreaInsets)
+        let windowSafeAreaInsets = viewportSafeAreaInsets(includesNavigationBar: includesNavigationBar)
+        var insets = self.windowSafeAreaInsets.wk_maxPerEdge(with: safeAreaInsets)
 
         if let navigationBarFrame {
             let overlap = bounds.intersection(navigationBarFrame)
@@ -250,7 +266,7 @@ final class ViewportMetricsResolver {
         )
         return ViewportMetrics(
             safeArea: ViewportSafeAreaMetrics(
-                viewport: windowSafeAreaInsets,
+                viewport: geometry.viewportSafeAreaInsets(includesNavigationBar: includesNavigationBar),
                 legacyFallbackBaseline: webView.safeAreaInsets
             ),
             obscuredInsets: obscuredInsets,
