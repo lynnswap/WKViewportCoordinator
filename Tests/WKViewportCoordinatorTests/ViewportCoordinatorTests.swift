@@ -306,7 +306,8 @@ struct ViewportCoordinatorTests {
             windowSafeAreaInsets: windowInsets,
             safeAreaInsets: windowInsets,
             navigationBarFrame: nil,
-            barFrames: [CGRect(x: isLeading ? 0 : 410, y: 0, width: 70, height: 680)]
+            // UIKit gives the bar a frame wider than its safe-area inset at the left edge.
+            barFrames: [isLeading ? CGRect(x: 0, y: 0, width: 130, height: 680) : CGRect(x: 410, y: 0, width: 70, height: 680)]
         )
         let insets = geometry.obscuredInsets(includesNavigationBar: true)
         #expect(insets.bottom == 30)

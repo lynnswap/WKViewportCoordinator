@@ -104,35 +104,24 @@ struct ViewportGeometry {
         // extend it, including a toolbar stacked above a tab bar. Classify each
         // bar before clipping: a narrow web view must not turn a bottom bar into
         // a side bar, nor may a vertical tab bar consume the viewport's height.
+        // The safe area already holds a vertical tab bar's width. Its frame is
+        // wider than the bar at the left edge, and so adds nothing here.
         var previous: UIEdgeInsets
         repeat {
             previous = insets
             for frame in barFrames {
                 let overlap = bounds.intersection(frame)
                 guard !overlap.isEmpty else { continue }
-                if frame.width >= frame.height {
-                    if abs(frame.minY - bounds.minY) < abs(bounds.maxY - frame.maxY) {
-                        let boundary = bounds.minY + max(insets.top, windowSafeAreaInsets.top)
-                        if overlap.minY <= boundary {
-                            insets.top = max(insets.top, overlap.maxY - bounds.minY)
-                        }
-                    } else {
-                        let boundary = bounds.maxY - max(insets.bottom, windowSafeAreaInsets.bottom)
-                        if overlap.maxY >= boundary {
-                            insets.bottom = max(insets.bottom, bounds.maxY - overlap.minY)
-                        }
+                guard frame.width >= frame.height else { continue }
+                if abs(frame.minY - bounds.minY) < abs(bounds.maxY - frame.maxY) {
+                    let boundary = bounds.minY + max(insets.top, windowSafeAreaInsets.top)
+                    if overlap.minY <= boundary {
+                        insets.top = max(insets.top, overlap.maxY - bounds.minY)
                     }
                 } else {
-                    if abs(frame.minX - bounds.minX) < abs(bounds.maxX - frame.maxX) {
-                        let boundary = bounds.minX + max(insets.left, windowSafeAreaInsets.left)
-                        if overlap.minX <= boundary {
-                            insets.left = max(insets.left, windowSafeAreaInsets.left, overlap.maxX - bounds.minX)
-                        }
-                    } else {
-                        let boundary = bounds.maxX - max(insets.right, windowSafeAreaInsets.right)
-                        if overlap.maxX >= boundary {
-                            insets.right = max(insets.right, windowSafeAreaInsets.right, bounds.maxX - overlap.minX)
-                        }
+                    let boundary = bounds.maxY - max(insets.bottom, windowSafeAreaInsets.bottom)
+                    if overlap.maxY >= boundary {
+                        insets.bottom = max(insets.bottom, bounds.maxY - overlap.minY)
                     }
                 }
             }
